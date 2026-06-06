@@ -107,35 +107,33 @@ function simulate(squad) {
 
   const avg = filled.reduce((s,p)=>s+p.rt,0) / filled.length;
 
-  // bilanciamento reparti
+  // Penalità di sicurezza: se manca il portiere (non dovrebbe mai capitare).
   const gk = filled.filter(p=>p.slot==="GK").length;
-  const def = filled.filter(p=>["RB","LB","CB"].includes(p.slot)).length;
-  const mid = filled.filter(p=>["CM","CDM","CAM"].includes(p.slot)).length;
-  const att = filled.filter(p=>["RW","LW","ST"].includes(p.slot)).length;
+  const penalty = gk === 1 ? 0 : -8;
 
-  let balance = 0;
-  if (gk === 1) balance += 1.5; else balance -= 8;
-  if (def >= 3) balance += 1;
-  if (mid >= 2) balance += 1;
-  if (att >= 1) balance += 1;
+  // ---- CHIMICA "scegliibile": premia blocchi di stesso club e stessa stagione ----
+  // Per ogni club, il blocco di n giocatori vale n*(n-1)/2 "legami" (più grande il blocco, più cresce).
+  const clubCount = {}, seasonCount = {};
+  filled.forEach(p => {
+    clubCount[p.c] = (clubCount[p.c]||0)+1;
+    seasonCount[p.s] = (seasonCount[p.s]||0)+1;
+  });
+  const links = (counts) => Object.values(counts)
+    .reduce((s,n)=> s + (n>=2 ? n*(n-1)/2 : 0), 0);
+  const clubLinks   = links(clubCount);     // max 55 (tutti stesso club)
+  const seasonLinks = links(seasonCount);   // max 55 (tutti stessa stagione)
 
-  // chimica: stesso club
-  const clubCount = {};
-  filled.forEach(p => { clubCount[p.c] = (clubCount[p.c]||0)+1; });
-  let chem = 0;
-  Object.values(clubCount).forEach(n => { if(n>=2) chem += (n-1)*0.8; });
+  // chimica club pesa di più (legame più forte) della stagione.
+  // peso MEDIO: vale qualche punto e può spostare il tier, ma non è risolutiva.
+  // blocco 2≈0.3, 4≈1.7, 6≈3.2, 8+≈4.5 (cap)
+  const chemRaw = clubLinks * 0.14 + seasonLinks * 0.06;
+  const chem = Math.min(4.5, chemRaw);
 
-  // chimica: stessa stagione
-  const seasonCount = {};
-  filled.forEach(p => { seasonCount[p.s] = (seasonCount[p.s]||0)+1; });
-  Object.values(seasonCount).forEach(n => { if(n>=4) chem += (n-3)*0.3; });
+  // forza = media reale + chimica (niente più bonus bilanciamento fittizio)
+  const strength = avg + penalty + chem;
 
-  // strength = media + piccoli bonus (chem max 4)
-  const strength = avg + balance + Math.min(chem, 4);
-
-  // Calibrazione sul range REALE: XI casuale ~76 (metà classifica), 38-0 solo ~87+
-  const t = Math.max(0, Math.min(1, (strength - 71) / 18));
-  const winRate = Math.pow(t, 2.6);           // curva ripida ma meno esplosiva al centro
+  const t = Math.max(0, Math.min(1, (strength - 72) / 13));
+  const winRate = Math.pow(t, 2.6);
   const wins = Math.round(38 * winRate);
   const remaining = 38 - wins;
   const drawShare = 0.32 + 0.13 * (1 - winRate);
@@ -162,6 +160,19 @@ function tierFor(points, wins) {
   return { name: "Lotta Salvezza", color: "#ff8e8e", emoji: "⚠️" };
 }
 
+// tier basato sulla POSIZIONE in classifica (coerente con la tabella finale)
+// posizioni Serie A: 1 scudetto · 2-4 Champions · 5-6 Europa · 7 Conference · 8-15 metà · 18-20 retrocessione
+function tierForPosition(pos, wins) {
+  if (wins === 38) return { name: "38-0 LEGGENDARIO", color: "#ffd24a", emoji: "🏆" };
+  if (pos === 1)  return { name: "Campioni d'Italia", color: "#ffd24a", emoji: "🏆" };
+  if (pos <= 4)   return { name: "Champions League", color: "#7ec8ff", emoji: "⭐" };
+  if (pos <= 6)   return { name: "Europa League", color: "#b6e36e", emoji: "✨" };
+  if (pos === 7)  return { name: "Conference League", color: "#a0e07e", emoji: "🌍" };
+  if (pos <= 15)  return { name: "Metà Classifica", color: "#e0e0e0", emoji: "➖" };
+  if (pos <= 17)  return { name: "Bassa Classifica", color: "#ffb38e", emoji: "🔻" };
+  return { name: "Retrocessione", color: "#ff8e8e", emoji: "⚠️" };
+}
+
 // ---------------- SIMULAZIONE GIORNATA PER GIORNATA ----------------
 // 38 partite con gol estratti da Poisson, calibrati sulla forza della squadra.
 // Seed deterministico: lo stesso XI produce sempre lo stesso calendario.
@@ -183,15 +194,51 @@ function poisson(lambda, rng) {
   return k - 1;
 }
 
-const OPPONENTS = ["Inter","Juventus","Napoli","Milan","Roma","Lazio","Atalanta",
-  "Fiorentina","Bologna","Torino","Udinese","Genoa","Cagliari","Lecce","Verona",
-  "Empoli","Monza","Sassuolo","Parma","Como"];
+// Forza di ogni club in OGNI stagione = media top-11 rating di quella rosa.
+// Se la rosa ha meno di 11 giocatori con dati, i mancanti contano come overall 69.
+const CLUB_STRENGTH_BY_SEASON = (() => {
+  const byCS = {};
+  PLAYERS.forEach(p => { const k = p.c+"|"+p.s; (byCS[k] = byCS[k] || []).push(p); });
+  const out = {};
+  for (const [k, arr] of Object.entries(byCS)) {
+    const top = arr.map(p=>p.rt).sort((a,b)=>b-a).slice(0,11);
+    while (top.length < 11) top.push(69);           // riempi i buchi con 69
+    out[k] = top.reduce((s,r)=>s+r,0)/11;
+  }
+  return out;
+})();
+
+const ALL_SEASONS = [...new Set(PLAYERS.map(p=>p.s))].sort();
+
+// avversarie reali di una stagione: tutti i club dell'annata, poi tieni le 19 più forti
+// (così con la tua squadra il campionato è sempre a 20). Toglie le più deboli se necessario.
+function opponentsForSeason(season) {
+  return Object.entries(CLUB_STRENGTH_BY_SEASON)
+    .filter(([k]) => k.endsWith("|"+season))
+    .map(([k, str]) => ({ club: k.split("|")[0], str, season }))
+    .sort((a,b)=>b.str-a.str)
+    .slice(0, 19);
+}
+
+// Calendario: ogni avversaria affrontata 2 volte (andata/ritorno), una casa una trasferta.
+function buildFixtures(rng, opponents) {
+  const order = [...opponents];
+  for (let i=order.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [order[i],order[j]]=[order[j],order[i]]; }
+  const fixtures = [];
+  const n = order.length;
+  order.forEach((o, i) => fixtures.push({ ...o, home: i % 2 === 0, round: i+1 }));
+  order.forEach((o, i) => fixtures.push({ ...o, home: i % 2 !== 0, round: i+1+n }));
+  return fixtures;
+}
+
+// converte un rating-forza club (~70-86) in scala 0..1 usata dal motore gol
+const strToT = (s) => Math.max(0, Math.min(1, (s - 72) / 13));
 
 function simulateSeason(squad, baseSim) {
   const filled = squad.filter(Boolean);
   const strength = baseSim.strength;
   // forza relativa 0..1 (stesso mapping del record)
-  const tStr = Math.max(0, Math.min(1, (strength - 71) / 18));
+  const tStr = Math.max(0, Math.min(1, (strength - 72) / 13));
   // attacco/difesa attesi: la forza pesa molto (top team segna tanto e subisce pochissimo)
   const teamAtt = 0.8 + tStr * 2.6;      // gol fatti attesi (0.8 .. 3.4)
   const teamDef = 2.0 - tStr * 1.85;     // gol subiti attesi (2.0 .. 0.15)
@@ -221,37 +268,69 @@ function simulateSeason(squad, baseSim) {
     return arr.sort((a,b)=>a-b);
   };
 
-  // 38 avversari: 19 squadre x andata/ritorno, forza variabile e mediamente competitiva
-  const fixtures = [];
-  for (let i=0;i<38;i++) {
-    const opp = OPPONENTS[i % OPPONENTS.length];
-    const home = i % 2 === 0;
-    const oppStr = 0.9 - (i % OPPONENTS.length) / OPPONENTS.length * 0.65;
-    fixtures.push({ opp, home, oppStr });
-  }
+  // STAGIONE pescata casualmente (deterministica dal seed): definisce le avversarie reali
+  const seasonIdx = Math.floor(mulberry32(seed ^ 0x5bf03635)() * ALL_SEASONS.length);
+  const playedSeason = ALL_SEASONS[seasonIdx];
+  const opponents = opponentsForSeason(playedSeason);
+
+  // calendario: avversarie reali della stagione, andata e ritorno
+  const fixtures = buildFixtures(rng, opponents);
+  const nGames = fixtures.length;
 
   let W=0,D=0,L=0,GF=0,GA=0;
-  const matches = fixtures.map((f, idx) => {
+  const matches = fixtures.map((f) => {
+    const oppT = strToT(f.str);                 // forza avversario 0..1
     const homeAdv = f.home ? 1.10 : 0.93;
-    const lamFor = Math.max(0.12, teamAtt * homeAdv * (1.15 - f.oppStr*0.95));
-    const lamAga = Math.max(0.06, (teamDef / homeAdv) * (0.45 + f.oppStr*1.15));
+    const lamFor = Math.max(0.12, teamAtt * homeAdv * (1.15 - oppT*0.95));
+    const lamAga = Math.max(0.06, (teamDef / homeAdv) * (0.45 + oppT*1.15));
     const gf = Math.min(8, poisson(lamFor, rng));
     const ga = Math.min(8, poisson(lamAga, rng));
     GF += gf; GA += ga;
     let res;
     if (gf > ga) { W++; res="W"; } else if (gf === ga) { D++; res="D"; } else { L++; res="L"; }
-    // marcatori nostri (con minuto) e minuti gol avversari
     const ourMin = minutes(gf);
     const scorers = ourMin.map(min => ({ name: pickScorer(), min }));
     const oppMin = minutes(ga);
-    return { round: idx+1, opp: f.opp, home: f.home, gf, ga, res, scorers, oppMin };
+    return { round: f.round, opp: f.club, home: f.home, gf, ga, res, scorers, oppMin };
+  }).sort((a,b)=>a.round-b.round);
+
+  const points = W*3 + D;
+
+  // ---- CLASSIFICA: le avversarie reali della stagione + la tua squadra ----
+  // punti attesi di un club dalla sua forza — stessa scala usata dalla squadra del giocatore
+  const expectedPoints = (t) => Math.round(19 + t * 75 + Math.pow(t, 2) * 7);
+  const myT = tStr;
+
+  // posizione ATTESA: confronto i punti attesi mio vs avversarie (deterministico)
+  const expectedTable = [
+    { club: "LA TUA SQUADRA", t: myT, pts: expectedPoints(myT), me: true },
+    ...opponents.map(o => ({ club: o.club, t: strToT(o.str), pts: expectedPoints(strToT(o.str)), me: false })),
+  ].sort((a,b)=>b.pts-a.pts);
+  const expectedPos = expectedTable.findIndex(r => r.me) + 1;
+
+  // posizione REALE: i miei punti veri + punti simulati delle avversarie (con casualità)
+  const rng2 = mulberry32(seed ^ 0x9e3779b9);
+  const oppResults = opponents.map(o => {
+    const t = strToT(o.str);
+    const base = expectedPoints(t);
+    const noise = Math.round((rng2()-0.5) * 22); // ±11 punti di varianza
+    return { club: o.club, pts: Math.max(0, Math.min(114, base + noise)), me: false };
   });
+  const realTable = [
+    { club: "LA TUA SQUADRA", pts: points, gd: GF-GA, me: true },
+    ...oppResults.map(o => ({ ...o, gd: 0 })),
+  ].sort((a,b)=> b.pts-a.pts || b.gd-a.gd);
+  const realPos = realTable.findIndex(r => r.me) + 1;
 
   return {
     matches, W, D, L, GF, GA,
-    points: W*3 + D,
+    points,
     gd: GF - GA,
-    tier: tierFor(W*3 + D, W),
+    season: playedSeason,
+    nTeams: opponents.length + 1,
+    tier: tierForPosition(realPos, W),
+    expectedPos, realPos,
+    expectedTable, realTable,
   };
 }
 
@@ -587,9 +666,12 @@ function SeasonLive({ squad, formation, onDone }) {
       <div style={{maxWidth:620, margin:"0 auto", padding:"0 16px"}}>
         {/* contatore live */}
         <div style={{...panel, marginBottom:14, position:"sticky", top:8, zIndex:5}}>
+          <div style={{textAlign:"center", color:S.cream, opacity:.6, fontSize:11, letterSpacing:1.5, textTransform:"uppercase", marginBottom:6}}>
+            Serie A {season.season}
+          </div>
           <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
             <span style={{color:S.gold, fontWeight:900, letterSpacing:1, fontSize:14}}>
-              GIORNATA {Math.min(shown, season.matches.length)}/38
+              GIORNATA {Math.min(shown, season.matches.length)}/{season.matches.length}
             </span>
             <span style={{color:S.cream, fontSize:14, fontWeight:700}}>
               <span style={{color:resColor.W}}>{W}V</span> · <span style={{color:resColor.D}}>{D}N</span> · <span style={{color:resColor.L}}>{L}P</span>
@@ -597,7 +679,7 @@ function SeasonLive({ squad, formation, onDone }) {
             </span>
           </div>
           <div style={{height:6, background:"rgba(255,255,255,.1)", borderRadius:3, marginTop:8, overflow:"hidden"}}>
-            <div style={{height:"100%", width:`${shown/38*100}%`, background:S.gold, transition:"width .3s"}}/>
+            <div style={{height:"100%", width:`${shown/season.matches.length*100}%`, background:S.gold, transition:"width .3s"}}/>
           </div>
         </div>
 
@@ -658,19 +740,123 @@ function SeasonLive({ squad, formation, onDone }) {
 }
 
 // ================== SCHERMATA RISULTATO ==================
+// helper: rettangolo con angoli arrotondati su canvas (compatibilità ampia)
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y,   x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x,   y+h, r);
+  ctx.arcTo(x,   y+h, x,   y,   r);
+  ctx.arcTo(x,   y,   x+w, y,   r);
+  ctx.closePath();
+}
+
 function Result({ squad, formation, onRestart }) {
   const sim = useMemo(()=>simulate(squad), [squad]);
   const season = useMemo(()=>simulateSeason(squad, sim), [squad, sim]);
   const [copied, setCopied] = useState(false);
   const [showSeason, setShowSeason] = useState(false);
+  const [showStandings, setShowStandings] = useState(false);
 
+  const ordinale = (n) => `${n}°`;
   const share = () => {
-    const txt = `🏟️ Il mio Serie A 38-0 (${formation.label}):\n` +
-      `📊 ${season.W}V ${season.D}N ${season.L}P — ${season.points} pti (${season.GF}:${season.GA})\n` +
-      `${season.tier.emoji} ${season.tier.name}\n` +
+    const txt = `🏟️ Il mio Serie A 38-0 — stagione ${season.season} (${formation.label}):\n` +
+      `🏆 ${ordinale(season.realPos)} posto — ${season.points} pti (${season.W}V ${season.D}N ${season.L}P)\n` +
+      `⚽ ${season.GF}:${season.GA} · ${season.tier.emoji} ${season.tier.name}\n` +
+      `(atteso: ${ordinale(season.expectedPos)})\n` +
       squad.filter(Boolean).map(p=>`${p.slot}: ${p.n}`).join("\n");
     navigator.clipboard?.writeText(txt);
     setCopied(true); setTimeout(()=>setCopied(false), 2000);
+  };
+
+  // ---- CARD IMMAGINE 1080x1350 su canvas, scaricabile ----
+  const [genState, setGenState] = useState("idle"); // idle | done
+  const downloadCard = () => {
+    const W = 1080, H = 1350;
+    const cv = document.createElement("canvas");
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+    const filled = squad.filter(Boolean);
+    const pos = POS[formation.key] || POS["4-3-3"];
+
+    // sfondo
+    const bg = ctx.createLinearGradient(0,0,0,H);
+    bg.addColorStop(0, "#06241a"); bg.addColorStop(1, "#04140e");
+    ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
+
+    // header
+    ctx.textAlign = "center";
+    ctx.fillStyle = S.gold;
+    ctx.font = "900 64px Arial";
+    ctx.fillText("SERIE A 38-0", W/2, 96);
+    ctx.fillStyle = S.cream;
+    ctx.font = "600 30px Arial";
+    ctx.fillText(`Stagione ${season.season}  ·  ${formation.label}`, W/2, 142);
+
+    // tier + posizione (banner)
+    ctx.fillStyle = season.tier.color;
+    ctx.font = "900 58px Arial";
+    ctx.fillText(`${season.tier.emoji} ${season.tier.name.toUpperCase()}`, W/2, 220);
+    ctx.fillStyle = S.cream;
+    ctx.font = "700 38px Arial";
+    ctx.fillText(`${ordinale(season.realPos)} posto  ·  ${season.points} punti`, W/2, 272);
+    ctx.font = "500 28px Arial";
+    ctx.fillStyle = "rgba(244,236,216,.6)";
+    ctx.fillText(`${season.W}V  ${season.D}N  ${season.L}P   ·   ⚽${season.GF}:${season.GA}`, W/2, 314);
+
+    // CAMPO
+    const fx = 70, fy = 360, fw = W - 140, fh = 820;
+    ctx.fillStyle = S.field;
+    roundRect(ctx, fx, fy, fw, fh, 24); ctx.fill();
+    // strisce campo
+    ctx.fillStyle = S.fieldHi;
+    for (let i=0;i<6;i+=2) ctx.fillRect(fx, fy + i*fh/6, fw, fh/6);
+    // linee
+    ctx.strokeStyle = "rgba(255,255,255,.25)"; ctx.lineWidth = 3;
+    ctx.strokeRect(fx+14, fy+14, fw-28, fh-28);
+    ctx.beginPath(); ctx.moveTo(fx+14, fy+fh/2); ctx.lineTo(fx+fw-14, fy+fh/2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(fx+fw/2, fy+fh/2, 70, 0, 2*Math.PI); ctx.stroke();
+    // aree
+    ctx.strokeRect(fx+fw/2-110, fy+14, 220, 90);
+    ctx.strokeRect(fx+fw/2-110, fy+fh-104, 220, 90);
+
+    // giocatori (y POS è dal basso = porta nostra in basso)
+    filled.forEach((p, i) => {
+      const [px, py] = pos[i] || [50,50];
+      const cx = fx + (px/100)*fw;
+      const cy = fy + (py/100)*fh;
+      // disco
+      ctx.beginPath(); ctx.arc(cx, cy, 38, 0, 2*Math.PI);
+      ctx.fillStyle = S.gold; ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,.3)"; ctx.lineWidth = 2; ctx.stroke();
+      // ruolo
+      ctx.fillStyle = S.ink; ctx.font = "900 22px Arial"; ctx.textAlign = "center";
+      ctx.fillText(p.slot, cx, cy+7);
+      // nome (riquadro scuro sotto)
+      const name = p.n.length > 16 ? p.n.slice(0,15)+"…" : p.n;
+      ctx.font = "700 22px Arial";
+      const tw = ctx.measureText(name).width;
+      ctx.fillStyle = "rgba(0,0,0,.6)";
+      roundRect(ctx, cx - tw/2 - 10, cy+46, tw+20, 32, 8); ctx.fill();
+      ctx.fillStyle = S.cream;
+      ctx.fillText(name, cx, cy+68);
+    });
+
+    // footer
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(244,236,216,.45)";
+    ctx.font = "500 26px Arial";
+    ctx.fillText("universosportivo.com", W/2, H-40);
+
+    cv.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `serie-a-38-0-${season.season}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setGenState("done"); setTimeout(()=>setGenState("idle"), 2000);
+    }, "image/png");
   };
 
   return (
@@ -680,6 +866,7 @@ function Result({ squad, formation, onRestart }) {
         <div style={{...panel, textAlign:"center", borderColor:season.tier.color}}>
           <div style={{fontSize:48}}>{season.tier.emoji}</div>
           <div style={{color:season.tier.color, fontSize:30, fontWeight:900, letterSpacing:1}}>{season.tier.name}</div>
+          <div style={{color:S.cream, opacity:.55, fontSize:12, letterSpacing:1, marginTop:2}}>Serie A {season.season}</div>
           <div style={{display:"flex", justifyContent:"center", gap:24, margin:"16px 0", flexWrap:"wrap"}}>
             <Stat n={season.W} l="Vittorie" c="#6ee7a8" />
             <Stat n={season.D} l="Pareggi" c="#e0e0e0" />
@@ -694,19 +881,95 @@ function Result({ squad, formation, onRestart }) {
           </div>
         </div>
 
+        <PositionSummary season={season} />
+
         {!showSeason && (
           <Pitch formation={formation} squad={squad} activeIdx={-1} hideRatings={false} />
         )}
 
         {showSeason && <SeasonTable season={season} />}
+        {showStandings && <StandingsTable season={season} />}
 
         <div style={{display:"flex", gap:10, justifyContent:"center", marginTop:16, flexWrap:"wrap"}}>
-          <button onClick={()=>setShowSeason(s=>!s)} style={bigBtnSm}>
-            {showSeason ? "👥 Vedi la rosa" : "📅 Simula la stagione"}
+          <button onClick={()=>{setShowSeason(s=>!s); setShowStandings(false);}} style={bigBtnSm}>
+            {showSeason ? "👥 Vedi la rosa" : "📅 Calendario"}
+          </button>
+          <button onClick={()=>{setShowStandings(s=>!s); setShowSeason(false);}} style={bigBtnSm}>
+            {showStandings ? "👥 Vedi la rosa" : "📊 Classifica"}
           </button>
           <button onClick={share} style={bigBtnSm}>{copied?"✓ Copiato!":"📲 Condividi"}</button>
+          <button onClick={downloadCard} style={{...bigBtnSm, background:S.gold, color:S.ink}}>
+            {genState==="done" ? "✓ Scaricata!" : "🖼️ Scarica immagine"}
+          </button>
           <button onClick={onRestart} style={{...bigBtnSm, background:"transparent", border:`2px solid ${S.gold}`, color:S.gold}}>↻ Rigioca</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// posizione attesa vs reale + commento sullo scarto
+function PositionSummary({ season }) {
+  const exp = season.expectedPos, real = season.realPos;
+  const diff = exp - real; // positivo = ha reso SOPRA le attese
+  let comment, ccolor;
+  if (diff >= 3) { comment = "Hai reso ben oltre le attese! 🚀"; ccolor = "#6ee7a8"; }
+  else if (diff >= 1) { comment = "Leggermente sopra le attese 👍"; ccolor = "#b6e36e"; }
+  else if (diff === 0) { comment = "Esattamente come da pronostico 🎯"; ccolor = "#e0e0e0"; }
+  else if (diff >= -2) { comment = "Un filo sotto le attese 😕"; ccolor = "#ffd24a"; }
+  else { comment = "Stagione deludente rispetto ai valori 📉"; ccolor = "#ff8e8e"; }
+  const ord = (n) => `${n}°`;
+  return (
+    <div style={{...panel, marginTop:14}}>
+      <div style={{display:"flex", justifyContent:"space-around", alignItems:"center", textAlign:"center", flexWrap:"wrap", gap:12}}>
+        <div>
+          <div style={{color:S.cream, opacity:.55, fontSize:11, letterSpacing:1.5, textTransform:"uppercase"}}>Posizione attesa</div>
+          <div style={{fontSize:34, fontWeight:900, color:S.cream, opacity:.85}}>{ord(exp)}</div>
+          <div style={{color:S.cream, opacity:.45, fontSize:11}}>sulla carta</div>
+        </div>
+        <div style={{fontSize:24, color:S.cream, opacity:.4}}>→</div>
+        <div>
+          <div style={{color:S.cream, opacity:.55, fontSize:11, letterSpacing:1.5, textTransform:"uppercase"}}>Posizione reale</div>
+          <div style={{fontSize:40, fontWeight:900, color:S.gold}}>{ord(real)}</div>
+          <div style={{color:S.cream, opacity:.45, fontSize:11}}>sul campo</div>
+        </div>
+      </div>
+      <div style={{textAlign:"center", marginTop:10, color:ccolor, fontWeight:700, fontSize:14}}>{comment}</div>
+    </div>
+  );
+}
+
+// classifica finale completa (20 squadre)
+function StandingsTable({ season }) {
+  return (
+    <div style={panel}>
+      <div style={{textAlign:"center", color:S.gold, fontWeight:900, letterSpacing:1, marginBottom:12}}>
+        CLASSIFICA FINALE
+      </div>
+      <div style={{display:"flex", flexDirection:"column", gap:3}}>
+        {season.realTable.map((r, i) => {
+          const pos = i+1;
+          const zone = pos<=4 ? "#7ec8ff" : pos<=6 ? "#b6e36e" : pos>=18 ? "#ff8e8e" : "transparent";
+          return (
+            <div key={r.club} style={{
+              display:"flex", alignItems:"center", gap:10, padding:"7px 10px", borderRadius:7,
+              background: r.me ? "rgba(255,210,74,.15)" : "rgba(0,0,0,.18)",
+              border: r.me ? `1px solid ${S.gold}` : "1px solid transparent",
+            }}>
+              <span style={{width:20, textAlign:"center", fontWeight:800, fontSize:13,
+                color: r.me ? S.gold : S.cream, borderLeft:`3px solid ${zone}`, paddingLeft:6}}>{pos}</span>
+              <span style={{flex:1, color: r.me ? S.gold : S.cream, fontWeight: r.me?900:600, fontSize:14}}>
+                {r.club}
+              </span>
+              <span style={{color: r.me ? S.gold : S.cream, opacity:r.me?1:.7, fontWeight:900, fontSize:14}}>{r.pts}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{display:"flex", justifyContent:"center", gap:14, marginTop:10, fontSize:11, color:S.cream, opacity:.6, flexWrap:"wrap"}}>
+        <span><b style={{color:"#7ec8ff"}}>■</b> Champions</span>
+        <span><b style={{color:"#b6e36e"}}>■</b> Europa</span>
+        <span><b style={{color:"#ff8e8e"}}>■</b> Retrocessione</span>
       </div>
     </div>
   );
@@ -719,7 +982,7 @@ function SeasonTable({ season }) {
   return (
     <div style={panel}>
       <div style={{textAlign:"center", color:S.gold, fontWeight:900, letterSpacing:1, marginBottom:12}}>
-        CALENDARIO · 38 GIORNATE
+        CALENDARIO · SERIE A {season.season} · {season.matches.length} GIORNATE
       </div>
       <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))", gap:6}}>
         {season.matches.map(m => (
@@ -797,7 +1060,7 @@ export default function App() {
       const club = pick(CLUBS), season = pick(SEASONS);
       const pool = PLAYERS.filter(p => p.c===club && p.s===season &&
         !usedIds.has(p.pid) && eligibleFor(p, slotRole));
-      if (pool.length > 0) found = { club, season, candidates: pool.slice(0,6) };
+      if (pool.length > 0) found = { club, season, candidates: pool.sort((a,b)=>b.rt-a.rt).slice(0,6) };
       attempt++;
     }
     if (!found) {
@@ -805,7 +1068,7 @@ export default function App() {
       if (pool.length) {
         const p0 = pick(pool);
         const cand = PLAYERS.filter(p => p.c===p0.c && p.s===p0.s && !usedIds.has(p.pid) && eligibleFor(p,slotRole));
-        found = { club: p0.c, season: p0.s, candidates: cand.slice(0,6) };
+        found = { club: p0.c, season: p0.s, candidates: cand.sort((a,b)=>b.rt-a.rt).slice(0,6) };
       }
     }
     setTimeout(()=>{ setSpin(found); setSpinning(false); }, 1100);
@@ -824,7 +1087,7 @@ export default function App() {
       const club = pick(CLUBS), season = pick(SEASONS);
       const pool = PLAYERS.filter(p => p.c===club && p.s===season &&
         !usedIds.has(p.pid) && fitsAny(p));
-      if (pool.length > 0) found = { club, season, candidates: pool.slice(0,8) };
+      if (pool.length > 0) found = { club, season, candidates: pool.sort((a,b)=>b.rt-a.rt).slice(0,8) };
       attempt++;
     }
     if (!found) {
@@ -832,7 +1095,7 @@ export default function App() {
       if (pool.length) {
         const p0 = pick(pool);
         const cand = PLAYERS.filter(p => p.c===p0.c && p.s===p0.s && !usedIds.has(p.pid) && fitsAny(p));
-        found = { club: p0.c, season: p0.s, candidates: cand.slice(0,8) };
+        found = { club: p0.c, season: p0.s, candidates: cand.sort((a,b)=>b.rt-a.rt).slice(0,8) };
       }
     }
     setTimeout(()=>{ setSpin(found); setSpinning(false); }, 1100);
@@ -895,3 +1158,4 @@ export default function App() {
       cancelPending:()=>setPendingPlayer(null)}} />
   );
 }
+
