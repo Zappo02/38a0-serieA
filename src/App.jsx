@@ -103,7 +103,7 @@ function eligibleFor(player, slotRole) {
 
 // ---------------- SIMULAZIONE RECORD ----------------
 // Calcola un punteggio squadra 0-100 e proietta record 38 partite
-function simulate(squad) {
+function simulate(squad, bonusTotal = 0) {
   const filled = squad.filter(Boolean);
   if (filled.length === 0) return null;
 
@@ -131,8 +131,8 @@ function simulate(squad) {
   const chemRaw = clubLinks * 0.14 + seasonLinks * 0.06;
   const chem = Math.min(4.5, chemRaw);
 
-  // forza = media reale + chimica (niente più bonus bilanciamento fittizio)
-  const strength = avg + penalty + chem;
+  // forza = media reale + chimica + bonus pre-partita (Capitano/Allenatore/Super Sub)
+  const strength = avg + penalty + chem + bonusTotal;
 
   const t = Math.max(0, Math.min(1, (strength - 72) / 13));
   const winRate = Math.pow(t, 2.6);
@@ -148,6 +148,7 @@ function simulate(squad) {
     avg: Math.round(avg*10)/10,
     wins, draws, losses, points,
     chem: Math.round(chem*10)/10,
+    bonus: Math.round(bonusTotal*10)/10,
     tier: tierFor(points, wins),
   };
 }
@@ -709,8 +710,8 @@ function Draft({ formation, squad, round, filledCount, spin, spinning, doSpin, r
 }
 
 // ================== SIMULAZIONE LIVE PARTITA PER PARTITA ==================
-function SeasonLive({ squad, formation, forcedSeason, onDone }) {
-  const sim = useMemo(()=>simulate(squad), [squad]);
+function SeasonLive({ squad, formation, forcedSeason, bonusTotal = 0, onDone }) {
+  const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
   const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason), [squad, sim, forcedSeason]);
   const [shown, setShown] = useState(0);   // quante partite mostrate
   const listRef = useRef(null);
@@ -828,8 +829,8 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function Result({ squad, formation, forcedSeason, onRestart }) {
-  const sim = useMemo(()=>simulate(squad), [squad]);
+function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, onRestart }) {
+  const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
   const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason), [squad, sim, forcedSeason]);
   const [copied, setCopied] = useState(false);
   const [showSeason, setShowSeason] = useState(false);
@@ -841,6 +842,7 @@ function Result({ squad, formation, forcedSeason, onRestart }) {
       `🏆 ${ordinale(season.realPos)} posto — ${season.points} pti (${season.W}V ${season.D}N ${season.L}P)\n` +
       `⚽ ${season.GF}:${season.GA} · ${season.tier.emoji} ${season.tier.name}\n` +
       `(atteso: ${ordinale(season.expectedPos)})\n` +
+      (captain ? `🅒 ${captain.n}` + (coach ? ` · 🎩 ${coach.name}` : "") + `\n` : (coach ? `🎩 ${coach.name}\n` : "")) +
       squad.filter(Boolean).map(p=>`${p.slot}: ${p.n}`).join("\n");
     navigator.clipboard?.writeText(txt);
     setCopied(true); setTimeout(()=>setCopied(false), 2000);
@@ -944,6 +946,13 @@ function Result({ squad, formation, forcedSeason, onRestart }) {
           <div style={{fontSize:48}}>{season.tier.emoji}</div>
           <div style={{color:season.tier.color, fontSize:30, fontWeight:900, letterSpacing:1}}>{season.tier.name}</div>
           <div style={{color:S.cream, opacity:.55, fontSize:12, letterSpacing:1, marginTop:2}}>Serie A {season.season}</div>
+          {(captain || coach || bonusTotal>0) && (
+            <div style={{display:"flex", justifyContent:"center", gap:8, flexWrap:"wrap", marginTop:10}}>
+              {captain && <span style={{fontSize:11, padding:"4px 10px", borderRadius:20, background:"rgba(255,210,74,.15)", color:S.gold, fontWeight:700}}>🅒 {captain.n}</span>}
+              {coach && <span style={{fontSize:11, padding:"4px 10px", borderRadius:20, background:"rgba(255,210,74,.15)", color:S.gold, fontWeight:700}}>🎩 {coach.name}</span>}
+              {bonusTotal>0 && <span style={{fontSize:11, padding:"4px 10px", borderRadius:20, background:"rgba(110,231,168,.15)", color:"#6ee7a8", fontWeight:700}}>Bonus +{bonusTotal.toFixed(2)}</span>}
+            </div>
+          )}
           <div style={{display:"flex", justifyContent:"center", gap:24, margin:"16px 0", flexWrap:"wrap"}}>
             <Stat n={season.W} l="Vittorie" c="#6ee7a8" />
             <Stat n={season.D} l="Pareggi" c="#e0e0e0" />
@@ -1096,6 +1105,193 @@ function Stat({n,l,c}) {
 
 
 // ================== COMPONENTE PRINCIPALE ==================
+// ================== ONDATA 2: BONUS PRE-PARTITA ==================
+// 5 allenatori con bonus legato ai titoli vinti in Serie A
+const COACHES = [
+  { id:"allegri",   name:"Max Allegri",      titles:"6 scudetti",   bonus:0.3, emoji:"🎩" },
+  { id:"conte",     name:"Antonio Conte",    titles:"4 scudetti",   bonus:0.3, emoji:"🔥" },
+  { id:"spalletti",  name:"Luciano Spalletti", titles:"1 scudetto",  bonus:0.2, emoji:"🧠" },
+  { id:"gasperini", name:"Gian Piero Gasperini", titles:"gioco offensivo", bonus:0.2, emoji:"⚡" },
+  { id:"nessuno",   name:"Nessun allenatore", titles:"vai a istinto", bonus:0,   emoji:"🚫" },
+];
+
+// Capitano: bonus in base al tier di rating del giocatore scelto come capitano
+function captainBonus(rt) {
+  if (rt >= 89) return 0.4;
+  if (rt >= 85) return 0.3;
+  if (rt >= 80) return 0.2;
+  return 0.1;
+}
+
+// indice del giocatore più debole (per Super Sub)
+function weakestIdx(squad) {
+  let idx = -1, min = Infinity;
+  squad.forEach((p,i) => { if (p && p.rt < min) { min = p.rt; idx = i; } });
+  return idx;
+}
+
+function BonusSelect({ squad, formation, usedIds, onConfirm }) {
+  const filled = squad.filter(Boolean);
+  // CAPITANO
+  const [captainPid, setCaptainPid] = useState(null);
+  // ALLENATORE
+  const [coachId, setCoachId] = useState("nessuno");
+  // SUPER SUB
+  const weakIdx = useMemo(()=>weakestIdx(squad), [squad]);
+  const weakPlayer = weakIdx >= 0 ? squad[weakIdx] : null;
+  const [subPlayer, setSubPlayer] = useState(null);   // sostituto scelto
+  const [subSpin, setSubSpin] = useState(null);        // {club, season, candidates}
+  const [subSpinning, setSubSpinning] = useState(false);
+  const [subDone, setSubDone] = useState(false);       // ha deciso (scelto o saltato)
+
+  const weakRole = weakPlayer ? weakPlayer.slot : null;
+
+  const spinSub = useCallback(() => {
+    if (!weakRole) return;
+    setSubSpinning(true); setSubPlayer(null);
+    let attempt = 0, found = null;
+    while (attempt < 400 && !found) {
+      const club = pick(CLUBS), season = pick(SEASONS);
+      const pool = PLAYERS.filter(p => p.c===club && p.s===season &&
+        !usedIds.has(p.pid) && eligibleFor(p, weakRole) && p.rt > weakPlayer.rt);
+      if (pool.length > 0) found = { club, season, candidates: pool.sort((a,b)=>b.rt-a.rt).slice(0,6) };
+      attempt++;
+    }
+    if (!found) {
+      const pool = PLAYERS.filter(p => !usedIds.has(p.pid) && eligibleFor(p, weakRole) && p.rt > weakPlayer.rt);
+      if (pool.length) {
+        const p0 = pick(pool);
+        const cand = PLAYERS.filter(p => p.c===p0.c && p.s===p0.s && !usedIds.has(p.pid) && eligibleFor(p,weakRole) && p.rt>weakPlayer.rt);
+        found = { club:p0.c, season:p0.s, candidates: cand.sort((a,b)=>b.rt-a.rt).slice(0,6) };
+      }
+    }
+    setTimeout(()=>{ setSubSpin(found); setSubSpinning(false); if(!found) setSubDone(true); }, 1000);
+  }, [weakRole, weakPlayer, usedIds]);
+
+  // calcolo bonus totale + squad finale
+  const coach = COACHES.find(c=>c.id===coachId);
+  const capPlayer = captainPid ? filled.find(p=>p.pid===captainPid) : null;
+  const capB = capPlayer ? captainBonus(capPlayer.rt) : 0;
+  const coachB = coach ? coach.bonus : 0;
+  // Super Sub: il delta di rating del sostituto migliora la media -> lo traduciamo in bonus forza
+  const subB = subPlayer ? Math.min(1.0, (subPlayer.rt - weakPlayer.rt) * 0.12) : 0;
+  const bonusTotal = Math.round((capB + coachB + subB) * 100) / 100;
+
+  const confirm = () => {
+    let finalSquad = squad;
+    if (subPlayer && weakIdx >= 0) {
+      finalSquad = [...squad];
+      finalSquad[weakIdx] = { ...subPlayer, slot: weakRole };
+    }
+    onConfirm({
+      bonusTotal,
+      coach: coach && coach.id !== "nessuno" ? coach : null,
+      captain: capPlayer || null,
+      finalSquad,
+    });
+  };
+
+  const sectionTitle = { color:S.gold, fontSize:16, fontWeight:900, letterSpacing:1, marginBottom:4 };
+  const sectionSub = { color:S.cream, opacity:.6, fontSize:12, marginBottom:12 };
+
+  return (
+    <div style={wrap}>
+      <div style={{maxWidth:640, margin:"0 auto", padding:"24px 16px"}}>
+        <div style={{textAlign:"center", marginBottom:8}}>
+          <div style={{color:S.gold, fontSize:13, letterSpacing:3, opacity:.8}}>PRIMA DEL FISCHIO D'INIZIO</div>
+          <div style={{color:S.cream, fontSize:26, fontWeight:900, letterSpacing:1}}>Scegli i tuoi bonus</div>
+        </div>
+
+        {/* CAPITANO */}
+        <div style={{...panel, marginTop:18}}>
+          <div style={sectionTitle}>🅒 Capitano</div>
+          <div style={sectionSub}>La fascia dà carattere: bonus in base al rating del prescelto.</div>
+          <div style={{display:"flex", flexWrap:"wrap", gap:8}}>
+            {filled.sort((a,b)=>b.rt-a.rt).map(p => {
+              const on = captainPid === p.pid;
+              return (
+                <div key={p.pid} onClick={()=>setCaptainPid(on?null:p.pid)}
+                  style={{...chip(on), flex:"1 1 46%", display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+                  <span style={{overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{p.slot} · {p.n}</span>
+                  <span style={{fontWeight:900, marginLeft:8}}>{p.rt}</span>
+                </div>
+              );
+            })}
+          </div>
+          {capPlayer && <div style={{color:S.gold, fontSize:13, marginTop:10, fontWeight:700}}>
+            Capitano: {capPlayer.n} → +{capB.toFixed(2)} forza
+          </div>}
+        </div>
+
+        {/* ALLENATORE */}
+        <div style={{...panel, marginTop:14}}>
+          <div style={sectionTitle}>🎩 Allenatore</div>
+          <div style={sectionSub}>Una grande guida vale punti pesanti.</div>
+          <div style={{display:"flex", flexDirection:"column", gap:8}}>
+            {COACHES.map(c => {
+              const on = coachId === c.id;
+              return (
+                <div key={c.id} onClick={()=>setCoachId(c.id)}
+                  style={{...chip(on), flex:"1 1 auto", display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+                  <span>{c.emoji} {c.name} <span style={{opacity:.6, fontSize:12}}>· {c.titles}</span></span>
+                  <span style={{fontWeight:900}}>{c.bonus>0?`+${c.bonus.toFixed(1)}`:"—"}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* SUPER SUB */}
+        <div style={{...panel, marginTop:14}}>
+          <div style={sectionTitle}>🔁 Super Sub</div>
+          {weakPlayer ? (<>
+            <div style={sectionSub}>
+              Il tuo anello debole è <b style={{color:S.cream}}>{weakPlayer.n}</b> ({weakPlayer.slot} · {weakPlayer.rt}).
+              Gira per pescare un sostituto migliore, oppure tienilo.
+            </div>
+            {!subDone && !subSpin && !subSpinning && (
+              <div style={{display:"flex", gap:8}}>
+                <button onClick={spinSub} style={{...bigBtnSm, flex:1}}>🎡 Gira sostituto</button>
+                <button onClick={()=>setSubDone(true)} style={{...bigBtnSm, flex:1, background:"rgba(0,0,0,.25)", color:S.cream, border:`2px solid ${S.line}`}}>Tieni {weakPlayer.n}</button>
+              </div>
+            )}
+            {subSpinning && <div style={spinningBox}>🎡 Pesco un sostituto…</div>}
+            {subSpin && !subPlayer && (
+              <div>
+                <div style={{color:S.cream, opacity:.7, fontSize:12, margin:"4px 0 8px"}}>
+                  {subSpin.club} · {subSpin.season}
+                </div>
+                <div style={{display:"flex", flexWrap:"wrap", gap:8}}>
+                  {subSpin.candidates.map(p => (
+                    <div key={p.pid} onClick={()=>{setSubPlayer(p); setSubDone(true);}}
+                      style={{...chip(false), flex:"1 1 46%", display:"flex", justifyContent:"space-between"}}>
+                      <span style={{overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{p.n}</span>
+                      <span style={{fontWeight:900, color:S.gold}}>{p.rt}</span>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={()=>setSubDone(true)} style={{...bigBtnSm, marginTop:10, background:"rgba(0,0,0,.25)", color:S.cream, border:`2px solid ${S.line}`}}>Nessuno, tieni {weakPlayer.n}</button>
+              </div>
+            )}
+            {subPlayer && <div style={{color:S.gold, fontSize:13, marginTop:10, fontWeight:700}}>
+              Dentro {subPlayer.n} ({subPlayer.rt}) per {weakPlayer.n} → +{subB.toFixed(2)} forza
+            </div>}
+          </>) : (
+            <div style={sectionSub}>Rosa incompleta.</div>
+          )}
+        </div>
+
+        {/* RIEPILOGO + AVVIA */}
+        <div style={{...panel, marginTop:14, textAlign:"center"}}>
+          <div style={{color:S.cream, opacity:.7, fontSize:13}}>Bonus forza totale</div>
+          <div style={{color:S.gold, fontSize:34, fontWeight:900}}>+{bonusTotal.toFixed(2)}</div>
+        </div>
+        <button onClick={confirm} style={bigBtn}>⚽ INIZIA LA STAGIONE</button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [phase, setPhase] = useState("setup"); // setup | draft | result
   const [formationKey, setFormationKey] = useState("4-3-3");
@@ -1114,6 +1310,11 @@ export default function App() {
   const [usedIds, setUsedIds] = useState(new Set());
   const [pendingPlayer, setPendingPlayer] = useState(null); // Squad First: giocatore in attesa di slot
 
+  // ---- ONDATA 2: bonus pre-partita ----
+  const [bonusTotal, setBonusTotal] = useState(0);
+  const [coach, setCoach] = useState(null);
+  const [captain, setCaptain] = useState(null);
+
   // slot liberi (indici)
   const openSlots = useCallback((sq) =>
     formation.slots.map((r,i)=>({r,i})).filter(({i}) => !sq[i]),
@@ -1127,6 +1328,7 @@ export default function App() {
     setUsedIds(new Set());
     setSpin(null);
     setPendingPlayer(null);
+    setBonusTotal(0); setCoach(null); setCaptain(null);
     setPhase("draft");
   }, [formation, difficulty]);
 
@@ -1212,7 +1414,7 @@ export default function App() {
       const next = [...prev];
       next[slotIdx] = { ...player, slot: slotRole };
       const filled = next.filter(Boolean).length;
-      if (filled >= formation.slots.length) setTimeout(()=>setPhase("season"), 300);
+      if (filled >= formation.slots.length) setTimeout(()=>setPhase("bonus"), 300);
       return next;
     });
     setUsedIds(prev => new Set(prev).add(player.pid));
@@ -1244,8 +1446,9 @@ export default function App() {
 
   // ============ RENDER ============
   if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,startGame}} />;
-  if (phase === "season") return <SeasonLive {...{squad, formation, forcedSeason, onDone:()=>setPhase("result")}} />;
-  if (phase === "result") return <Result {...{squad, formation, forcedSeason, onRestart:()=>setPhase("setup")}} />;
+  if (phase === "bonus") return <BonusSelect {...{squad, formation, usedIds, onConfirm:({bonusTotal,coach,captain,finalSquad})=>{ setSquad(finalSquad); if(finalSquad!==squad){ const s=new Set(usedIds); finalSquad.forEach(p=>p&&s.add(p.pid)); setUsedIds(s);} setBonusTotal(bonusTotal); setCoach(coach); setCaptain(captain); setPhase("season"); }}} />;
+  if (phase === "season") return <SeasonLive {...{squad, formation, forcedSeason, bonusTotal, onDone:()=>setPhase("result")}} />;
+  if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, onRestart:()=>setPhase("setup")}} />;
 
   return (
     <Draft {...{formation, squad, round, filledCount, spin, spinning, doSpin, reroll, rerolls,
