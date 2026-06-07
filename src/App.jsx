@@ -51,6 +51,14 @@ const ratBadge = {
   display:"inline-block", marginLeft:6, background:S.ink, color:S.gold,
   borderRadius:5, padding:"1px 5px", fontSize:11, fontWeight:900,
 };
+const cardBtnLocked = {
+  background:"rgba(255,255,255,.06)", border:"1px dashed rgba(244,236,216,.25)",
+  borderRadius:10, padding:"10px 8px", cursor:"not-allowed", textAlign:"left",
+};
+const ratBadgeLocked = {
+  display:"inline-block", marginLeft:6, background:"rgba(0,0,0,.3)", color:"rgba(244,236,216,.5)",
+  borderRadius:5, padding:"1px 5px", fontSize:11, fontWeight:900,
+};
 const rerollBtn = {
   width:"100%", marginTop:12, padding:"10px", borderRadius:10, cursor:"pointer",
   background:"transparent", border:`2px solid ${S.line}`, color:S.cream, fontWeight:700, fontSize:13,
@@ -90,6 +98,9 @@ const CLUBS = [...new Set(PLAYERS.map(p => p.c))].sort();
 const SEASONS = [...new Set(PLAYERS.map(p => p.s))].sort();
 // stagioni reali (escluse le Legends): usate per simulare gli avversari del campionato
 const REAL_SEASONS = SEASONS.filter(s => s !== "Legends");
+// stagioni con rose troppo incomplete: le rose si possono pescare nel draft per
+// rinforzare la squadra, ma NON vengono mai simulate come campionato giocato.
+const INCOMPLETE_SEASONS = ["2004-05", "2005-06"];
 
 // ---------------- UTIL ----------------
 const rnd = (n) => Math.floor(Math.random() * n);
@@ -211,7 +222,8 @@ const CLUB_STRENGTH_BY_SEASON = (() => {
   return out;
 })();
 
-const ALL_SEASONS = REAL_SEASONS;
+// stagioni SIMULABILI come campionato (escluse Legends e annate incomplete)
+const ALL_SEASONS = REAL_SEASONS.filter(s => !INCOMPLETE_SEASONS.includes(s));
 
 // avversarie reali di una stagione: tutti i club dell'annata, poi tieni le 19 più forti
 // (così con la tua squadra il campionato è sempre a 20). Toglie le più deboli se necessario.
@@ -237,7 +249,9 @@ function buildFixtures(rng, opponents) {
 // converte un rating-forza club (~70-86) in scala 0..1 usata dal motore gol
 const strToT = (s) => Math.max(0, Math.min(1, (s - 72) / 13));
 
-function simulateSeason(squad, baseSim, forcedSeason) {
+function ordinaleNews(n) { return `${n}°`; }
+
+function simulateSeason(squad, baseSim, forcedSeason, meta = {}) {
   const filled = squad.filter(Boolean);
   const strength = baseSim.strength;
   // forza relativa 0..1 (stesso mapping del record)
@@ -306,8 +320,10 @@ function simulateSeason(squad, baseSim, forcedSeason) {
   const points = W*3 + D;
 
   // ---- CLASSIFICA: le avversarie reali della stagione + la tua squadra ----
-  // punti attesi di un club dalla sua forza — stessa scala usata dalla squadra del giocatore
-  const expectedPoints = (t) => Math.round(19 + t * 75 + Math.pow(t, 2) * 7);
+  // punti attesi di un club dalla sua forza — stessa scala usata dalla squadra del giocatore.
+  // Curva (pizzico C): cresce un po' più ripida in alto ma con tetto realistico ~94
+  // (in Serie A il record è ~102, ma è un'eccezione: una rivale "tipica" forte sta sui 88-94).
+  const expectedPoints = (t) => Math.round(20 + t * 66 + Math.pow(t, 1.7) * 10);
   const myT = tStr;
 
   // posizione ATTESA: confronto i punti attesi mio vs avversarie (deterministico)
@@ -317,19 +333,199 @@ function simulateSeason(squad, baseSim, forcedSeason) {
   ].sort((a,b)=>b.pts-a.pts);
   const expectedPos = expectedTable.findIndex(r => r.me) + 1;
 
-  // posizione REALE: i miei punti veri + punti simulati delle avversarie (con casualità)
+  // posizione REALE: i miei punti veri + punti simulati delle avversarie (con casualità).
+  // Modifica A: rumore ridotto a ±6 (era ±11) e tetto realistico a 96 punti, così con un
+  // bottino altissimo (es. 106) si chiude primi quasi sempre.
   const rng2 = mulberry32(seed ^ 0x9e3779b9);
   const oppResults = opponents.map(o => {
     const t = strToT(o.str);
     const base = expectedPoints(t);
-    const noise = Math.round((rng2()-0.5) * 22); // ±11 punti di varianza
-    return { club: o.club, pts: Math.max(0, Math.min(114, base + noise)), me: false };
+    const noise = Math.round((rng2()-0.5) * 12); // ±6 punti di varianza
+    return { club: o.club, pts: Math.max(0, Math.min(96, base + noise)), me: false };
   });
+
+  // ---- ONDATA 3+: EVENTI LIVE della stagione (flash news durante la simulazione) ----
+  // Alcuni eventi PENALIZZANO un'avversaria (le tolgono punti -> cambia la classifica).
+  // Altri colpiscono la TUA squadra (Super Sub, allenatore) o, raramente, ti penalizzano.
+  const { coach: metaCoach, captain: metaCaptain, superSub: metaSub } = meta;
+  const rngE = mulberry32(seed ^ 0x77f1e1d3);
+  const liveEvents = [];
+  const usedRounds = new Set();
+  const freeRound = () => {
+    for (let k=0;k<50;k++) {
+      const r = 2 + Math.floor(rngE() * Math.max(1, nGames - 3));
+      if (!usedRounds.has(r)) { usedRounds.add(r); return r; }
+    }
+    return 1 + Math.floor(rngE()*nGames);
+  };
+  // pool di avversarie ordinate per forza (le prime fanno più notizia)
+  const rivalNames = [...oppResults].sort((a,b)=>b.pts-a.pts).map(o=>o.club);
+  const penalizeRival = (club, pts) => {
+    const o = oppResults.find(x => x.club === club);
+    if (o) o.pts = Math.max(0, o.pts - pts);
+  };
+  // nome di un giocatore reale della rosa di quel club in quella stagione (per le plusvalenze)
+  const rosterName = (club) => {
+    const roster = PLAYERS.filter(p => p.c===club && p.s===playedSeason);
+    if (!roster.length) return null;
+    return roster[Math.floor(rngE()*roster.length)].n;
+  };
+  // penalità che colpisce la TUA squadra: la applichiamo direttamente ai punti.
+  let myPenalty = 0;
+
+  // PENALITÀ alle avversarie — con descrizioni chiare e qualche variante
+  const illecitoVariants = [
+    (c,p)=>`${c} perde 10 punti per illecito amministrativo: stipendi pagati "in nero" e non registrati a bilancio.`,
+    (c,p)=>`10 punti di penalizzazione per ${c}: bilanci falsati per nascondere un buco finanziario enorme.`,
+    (c,p)=>`${c} sanzionata con 10 punti: fatture per sponsorizzazioni inesistenti gonfiavano i ricavi del club.`,
+  ];
+  const sanzioneVariants = [
+    (c,p)=>`${c} penalizzata di 6 punti: tesseramenti irregolari di alcuni giocatori in violazione del regolamento.`,
+    (c,p)=>`6 punti in meno per ${c}: mancati pagamenti verso altri club e la lega hanno fatto scattare la sanzione.`,
+    (c,p)=>`${c} colpita da 6 punti di penalizzazione per inadempienze federali nella gestione del tesseramento.`,
+  ];
+  const penaltyTemplates = [
+    { pts: 15, label:"CASO PLUSVALENZE",
+      txt:(c, p)=> p
+        ? `${c} è stata penalizzata di 15 punti: ${p} è finito al centro di un caso di plusvalenze gonfiate, scambiato a un valore artificiale per truccare i bilanci.`
+        : `${c} è stata penalizzata di 15 punti: plusvalenze gonfiate, cioè giocatori scambiati a valori artificiali per truccare i bilanci.` },
+    { pts: 10, label:"ILLECITO AMMINISTRATIVO",
+      txt:(c, p)=> illecitoVariants[Math.floor(rngE()*illecitoVariants.length)](c, p) },
+    { pts: 6,  label:"SANZIONE FEDERALE",
+      txt:(c, p)=> sanzioneVariants[Math.floor(rngE()*sanzioneVariants.length)](c, p) },
+    { pts: 4,  label:"TIFOSERIA SQUALIFICATA",
+      txt:(c, p)=>`${c} multata e penalizzata di 4 punti: cori e disordini della tifoseria hanno fatto scattare la chiusura della curva e una sanzione in classifica al club.` },
+  ];
+  const colorTemplates = [
+    "🌧️ Maltempo in tutta la penisola: rinvii e campi al limite della praticabilità.",
+    "🦠 Influenza di stagione: diverse squadre con le rose decimate.",
+  ];
+
+  // costruiamo 3-4 eventi
+  const nEvents = 3 + Math.floor(rngE()*2); // 3 o 4
+  let usedPenalty = 0;
+  // CAP: al massimo UN evento contro la TUA squadra per stagione (e non è garantito).
+  let ownEventDone = false;
+
+  for (let i=0;i<nEvents;i++) {
+    const round = freeRound();
+    const roll = rngE();
+
+    // 1) ~8% RARO: penalità alla TUA squadra (conta come "evento contro di te")
+    if (roll < 0.08 && !ownEventDone) {
+      ownEventDone = true;
+      const pts = [4,6][Math.floor(rngE()*2)];
+      myPenalty += pts;
+      liveEvents.push({ round, kind:"own_penalty", title:"PENALIZZAZIONE",
+        text:`Brutte notizie: la tua squadra è stata penalizzata di ${pts} punti per un'irregolarità amministrativa. La classifica ne risente.`,
+        pts });
+      continue;
+    }
+
+    // 2) ~14%: infortunio/arresto/squalifica del Super Sub (se ne hai scelto uno)
+    if (metaSub && roll < 0.22 && !ownEventDone) {
+      ownEventDone = true;
+      const variants = [
+        { ico:"🩹", what:`si è procurato un grave infortunio e chiude la stagione in anticipo` },
+        { ico:"🚔", what:`è stato coinvolto in una vicenda giudiziaria ed è stato arrestato` },
+        { ico:"🟥", what:`è stato squalificato a lungo dal giudice sportivo` },
+      ];
+      const v = variants[Math.floor(rngE()*variants.length)];
+      const pts = 2 + Math.floor(rngE()*3); // 2-4 punti
+      myPenalty += pts;
+      liveEvents.push({ round, kind:"own_player", title:"TEGOLA IN ROSA",
+        text:`${v.ico} ${metaSub.n}, il tuo Super Sub, ${v.what}: la squadra perde una pedina e lascia per strada ${pts} punti.`,
+        pts });
+      continue;
+    }
+
+    // 3) ~14%: malattia dell'allenatore (se ne hai scelto uno)
+    if (metaCoach && roll < 0.36 && !ownEventDone) {
+      ownEventDone = true;
+      const pts = 2 + Math.floor(rngE()*2); // 2-3 punti
+      myPenalty += pts;
+      liveEvents.push({ round, kind:"own_coach", title:"PANCHINA IN AFFANNO",
+        text:`🤒 ${metaCoach.name} si è ammalato e salta diverse partite: senza la sua guida in panchina la squadra perde ${pts} punti.`,
+        pts });
+      continue;
+    }
+
+    // 4) ~40%: penalità a una rivale
+    if (roll < 0.76 && usedPenalty < penaltyTemplates.length) {
+      const target = rivalNames[Math.floor(rngE()*Math.min(6, rivalNames.length))];
+      const tpl = penaltyTemplates[usedPenalty++];
+      const pName = tpl.label === "CASO PLUSVALENZE" ? rosterName(target) : null;
+      penalizeRival(target, tpl.pts);
+      liveEvents.push({ round, kind:"penalty", title:tpl.label, text: tpl.txt(target, pName), club: target, pts: tpl.pts });
+      continue;
+    }
+
+    // 5) resto: evento di colore
+    const txt = colorTemplates[Math.floor(rngE()*colorTemplates.length)];
+    liveEvents.push({ round, kind:"color", title:"ULTIM'ORA", text: txt });
+  }
+  liveEvents.sort((a,b)=>a.round-b.round);
+
+  const myFinalPts = Math.max(0, points - myPenalty);
   const realTable = [
-    { club: "LA TUA SQUADRA", pts: points, gd: GF-GA, me: true },
+    { club: "LA TUA SQUADRA", pts: myFinalPts, gd: GF-GA, me: true },
     ...oppResults.map(o => ({ ...o, gd: 0 })),
   ].sort((a,b)=> b.pts-a.pts || b.gd-a.gd);
   const realPos = realTable.findIndex(r => r.me) + 1;
+
+  // ---- ONDATA 3: CAPOCANNONIERI della tua squadra ----
+  const goalCount = {};
+  matches.forEach(m => m.scorers.forEach(s => { goalCount[s.name] = (goalCount[s.name]||0)+1; }));
+  const topScorers = Object.entries(goalCount)
+    .map(([name, goals]) => ({ name, goals }))
+    .sort((a,b)=> b.goals - a.goals)
+    .slice(0, 5);
+
+  // ---- ONDATA 3: striscia migliore / peggiore (per narrativa) ----
+  let bestRun = 0, curRun = 0, worstRun = 0, curBad = 0;
+  matches.forEach(m => {
+    if (m.res === "W") { curRun++; bestRun = Math.max(bestRun, curRun); } else curRun = 0;
+    if (m.res === "L") { curBad++; worstRun = Math.max(worstRun, curBad); } else curBad = 0;
+  });
+  const biggestWin = matches.reduce((b,m)=> (m.res==="W" && (m.gf-m.ga) > (b? b.gf-b.ga : -99)) ? m : b, null);
+  const worstLoss  = matches.reduce((b,m)=> (m.res==="L" && (m.ga-m.gf) > (b? b.ga-b.gf : -99)) ? m : b, null);
+
+  // ---- ONDATA 3: eventi casuali della stagione (deterministici dal seed) ----
+  const rng3 = mulberry32(seed ^ 0x1a2b3c4d);
+  const EVENTS = [
+    { txt: "🩹 Un'ondata di infortuni a centrocampo ha messo alla prova la rosa.", w: 1 },
+    { txt: "🔥 Lo spogliatoio ha trovato una chimica speciale a metà stagione.", w: 1 },
+    { txt: "📣 La tifoseria ha spinto la squadra in ogni gara casalinga.", w: 1 },
+    { txt: "⚖️ Qualche decisione arbitrale ha fatto discutere a lungo.", w: 1 },
+    { txt: "🌧️ Un autunno di campi pesanti ha rallentato il gioco offensivo.", w: 1 },
+    { txt: "💪 Il mercato di gennaio ha dato nuova linfa al gruppo.", w: 1 },
+    { txt: "🧤 Il portiere ha vissuto una stagione da record di parate.", w: 1 },
+  ];
+  const pickEvents = () => {
+    const pool = [...EVENTS];
+    const out = [];
+    for (let k=0; k<2 && pool.length; k++) {
+      const idx = Math.floor(rng3() * pool.length);
+      out.push(pool.splice(idx,1)[0].txt);
+    }
+    return out;
+  };
+  const events = pickEvents();
+
+  // ---- ONDATA 3: titoli "Universo Sportivo" in base al rendimento ----
+  const news = [];
+  if (W === nGames) news.push("🏆 IMPRESA STORICA: stagione perfetta, nessuna sconfitta!");
+  else if (realPos === 1) news.push("🥇 CAMPIONI D'ITALIA: lo scudetto è tuo!");
+  else if (realPos <= 4) news.push(`⭐ IN CHAMPIONS: ${ordinaleNews(realPos)} posto e qualificazione europea.`);
+  else if (realPos >= (nTeams - 2)) news.push("🔻 STAGIONE DA INCUBO: la salvezza è a rischio.");
+  if (bestRun >= 5) news.push(`🔥 Striscia da urlo: ${bestRun} vittorie consecutive.`);
+  if (topScorers[0]) news.push(`⚽ ${topScorers[0].name} trascinatore con ${topScorers[0].goals} gol.`);
+  if (biggestWin) news.push(`💥 Manita di giornata: ${biggestWin.gf}-${biggestWin.ga} ${biggestWin.home?"in casa":"in trasferta"} col ${biggestWin.opp}.`);
+  liveEvents.filter(e=>e.kind==="penalty").forEach(e => news.push(`⚖️ ${e.club} penalizzata di ${e.pts} punti.`));
+  liveEvents.filter(e=>e.kind==="own_penalty").forEach(e => news.push(`⚠️ La tua squadra penalizzata di ${e.pts} punti.`));
+  liveEvents.filter(e=>e.kind==="own_player").forEach(() => news.push(`🩹 Stagione segnata dalla tegola sul tuo Super Sub.`));
+  liveEvents.filter(e=>e.kind==="own_coach").forEach(() => news.push(`🤒 Allenatore ko per malattia in alcune gare chiave.`));
+  if (news.length === 0) news.push("📰 Una stagione di alti e bassi per la tua squadra.");
 
   return {
     matches, W, D, L, GF, GA,
@@ -340,6 +536,9 @@ function simulateSeason(squad, baseSim, forcedSeason) {
     tier: tierForPosition(realPos, W),
     expectedPos, realPos,
     expectedTable, realTable,
+    topScorers, events, news,
+    bestRun, worstRun, biggestWin, worstLoss,
+    liveEvents,
   };
 }
 
@@ -418,8 +617,8 @@ function Header({ small }) {
 // ================== SCHERMATA SETUP ==================
 const PICK_MODES = {
   realistica: { label: "Realistica", sub: "escono tutte le squadre" },
-  normale:    { label: "Normale",    sub: "primi 9 pick 80+" },
-  facile:     { label: "Facile",     sub: "solo pick 80+" },
+  normale:    { label: "Normale",    sub: "≥1 da 80+ (2 pesche libere)" },
+  facile:     { label: "Facile",     sub: "garantito ≥1 da 80+" },
 };
 
 function InfoModal({ onClose }) {
@@ -437,7 +636,7 @@ function InfoModal({ onClose }) {
           <p><b style={{color:S.gold}}>Forza della squadra.</b> Conta la media degli overall dei tuoi 11, più un bonus <b>chimica</b> se schieri più giocatori dello stesso club o della stessa stagione. Manca il portiere? Penalità.</p>
           <p><b style={{color:S.gold}}>La simulazione.</b> Affronti le 19 squadre reali della stagione giocata (scelta o casuale), andata e ritorno. Più la tua forza supera quella degli avversari di quell'annata, più vinci.</p>
           <p><b style={{color:S.gold}}>Posizione attesa.</b> In base alla forza stimiamo dove dovresti classificarti; poi vedi dove sei arrivato davvero, con scudetto, coppe europee o retrocessione.</p>
-          <p><b style={{color:S.gold}}>Modalità di pesca.</b> <b>Realistica</b>: escono tutte le squadre, anche le deboli. <b>Normale</b>: i primi 9 pick garantiscono almeno un giocatore da 80+. <b>Facile</b>: escono solo giocatori da 80+.</p>
+          <p><b style={{color:S.gold}}>Modalità di pesca.</b> <b>Realistica</b>: escono tutte le squadre, nessun vincolo. <b>Facile</b>: ogni pescata garantisce almeno un giocatore da 80+ tra i candidati. <b>Normale</b>: come Facile, ma 2 pescaggi casuali (mai tra gli ultimi) sono liberi e possono offrire solo giocatori sotto 80.</p>
           <p style={{opacity:.7, marginBottom:0}}><b>Difficoltà.</b> Facile dà 3 reroll, Normale nessuno, Difficile nasconde i rating durante il draft.</p>
         </div>
       </div>
@@ -507,7 +706,7 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
         </div>
         {seasonMode === "scelta" && (
           <div style={{...chipRow, marginTop:4}}>
-            {REAL_SEASONS.map(s => (
+            {ALL_SEASONS.map(s => (
               <button key={s} onClick={()=>setChosenSeason(s)} style={{...chip(chosenSeason===s), fontSize:12, padding:"7px 10px"}}>
                 {s}
               </button>
@@ -686,15 +885,21 @@ function Draft({ formation, squad, round, filledCount, spin, spinning, doSpin, r
                     </div>
                   </div>
                   <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))", gap:8}}>
-                    {spin.candidates.map(p => (
-                      <button key={p.id} onClick={()=>choose(p)} style={cardBtn}>
-                        <div style={{fontWeight:700, fontSize:14, color:S.ink}}>{p.n}</div>
-                        <div style={{fontSize:11, color:"#2c5f48", marginTop:2}}>
+                    {spin.candidates.map(p => {
+                      const locked = p.playable === false;
+                      return (
+                      <button key={p.id} onClick={()=>{ if(!locked) choose(p); }} disabled={locked}
+                        style={locked ? cardBtnLocked : cardBtn}
+                        title={locked ? "Ruolo già occupato nel tuo XI" : undefined}>
+                        <div style={{fontWeight:700, fontSize:14, color: locked ? "rgba(244,236,216,.6)" : S.ink}}>{p.n}</div>
+                        <div style={{fontSize:11, color: locked ? "rgba(244,236,216,.4)" : "#2c5f48", marginTop:2}}>
                           {draftMode==="squad" ? p.rg.join("/") : p.r}
-                          {!hideRatings && <span style={ratBadge}>{p.rt}</span>}
+                          {!hideRatings && <span style={locked ? ratBadgeLocked : ratBadge}>{p.rt}</span>}
                         </div>
+                        {locked && <div style={{fontSize:9, color:"rgba(244,236,216,.5)", marginTop:3, letterSpacing:.5}}>RUOLO PIENO</div>}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                   {rerolls>0 && (
                     <button onClick={reroll} style={rerollBtn}>🎲 Rigira ({rerolls} rimasti)</button>
@@ -710,18 +915,43 @@ function Draft({ formation, squad, round, filledCount, spin, spinning, doSpin, r
 }
 
 // ================== SIMULAZIONE LIVE PARTITA PER PARTITA ==================
-function SeasonLive({ squad, formation, forcedSeason, bonusTotal = 0, onDone }) {
+function SeasonLive({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, onDone }) {
   const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
-  const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason), [squad, sim, forcedSeason]);
+  const meta = useMemo(()=>({ coach, captain, superSub }), [coach, captain, superSub]);
+  const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason, meta), [squad, sim, forcedSeason, meta]);
   const [shown, setShown] = useState(0);   // quante partite mostrate
+  const [pausedEvent, setPausedEvent] = useState(null); // evento mostrato a tutto schermo
+  const firedRef = useRef(new Set());       // giornate il cui evento è già stato mostrato
   const listRef = useRef(null);
 
-  // avanza automaticamente di una partita ogni ~700ms
+  // eventi indicizzati per giornata
+  const eventsByRound = useMemo(() => {
+    const m = {};
+    (season.liveEvents || []).forEach(e => { (m[e.round] = m[e.round] || []).push(e); });
+    return m;
+  }, [season.liveEvents]);
+
+  // avanza automaticamente di una partita ogni ~700ms, ma si FERMA su un evento
   useEffect(() => {
+    if (pausedEvent) return;                          // in pausa: non avanzare
     if (shown >= season.matches.length) return;
-    const t = setTimeout(()=>setShown(s=>s+1), shown===0?400:700);
+    // se la giornata appena mostrata ha un evento non ancora visto, fermati e mostralo
+    const ev = eventsByRound[shown];
+    if (ev && shown > 0 && !firedRef.current.has(shown)) {
+      firedRef.current.add(shown);
+      const t = setTimeout(()=>setPausedEvent({ round: shown, items: ev }), 250);
+      return () => clearTimeout(t);
+    }
+    const t = setTimeout(()=>setShown(s=>s+1), shown===0?400:650);
     return () => clearTimeout(t);
-  }, [shown, season.matches.length]);
+  }, [shown, season.matches.length, eventsByRound, pausedEvent]);
+
+  // dopo la pausa, riprende automaticamente
+  useEffect(() => {
+    if (!pausedEvent) return;
+    const t = setTimeout(()=>setPausedEvent(null), 3600);
+    return () => clearTimeout(t);
+  }, [pausedEvent]);
 
   // autoscroll all'ultima partita
   useEffect(() => {
@@ -741,6 +971,48 @@ function SeasonLive({ squad, formation, forcedSeason, bonusTotal = 0, onDone }) 
   return (
     <div style={wrap}>
       <Header small />
+
+      {/* ---- BANNER NOTIZIA GRANDE: blocca la simulazione per qualche secondo ---- */}
+      {pausedEvent && (
+        <div style={{position:"fixed", inset:0, zIndex:50, display:"flex", alignItems:"center",
+          justifyContent:"center", padding:20, background:"rgba(3,18,13,.78)", backdropFilter:"blur(3px)",
+          animation:"us-fade .25s ease"}}
+          onClick={()=>setPausedEvent(null)}>
+          <div style={{maxWidth:480, width:"100%", borderRadius:18, overflow:"hidden",
+            border:`3px solid ${pausedEvent.items.some(i=>i.pts)?"#ff8e8e":S.gold}`,
+            boxShadow:"0 20px 60px rgba(0,0,0,.6)", animation:"us-pop .3s ease"}}>
+            <div style={{background:pausedEvent.items.some(i=>i.pts)?"#ff8e8e":S.gold,
+              color:S.ink, fontWeight:900, letterSpacing:2, fontSize:13, padding:"12px 18px",
+              display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <span>📰 UNIVERSO SPORTIVO — ULTIM'ORA</span>
+              <span style={{opacity:.7, fontSize:11}}>{pausedEvent.round}ª giornata</span>
+            </div>
+            <div style={{background:"linear-gradient(160deg, #0e5138, #06241a)", padding:"24px 22px"}}>
+              {pausedEvent.items.map((e,i) => {
+                const own = e.kind==="own_penalty" || e.kind==="own_player" || e.kind==="own_coach";
+                return (
+                <div key={i} style={{marginBottom: i<pausedEvent.items.length-1?16:0}}>
+                  <div style={{color: e.pts ? "#ff8e8e" : S.gold, fontSize:12, fontWeight:900,
+                    letterSpacing:1.5, marginBottom:6}}>{e.title}{own && " · LA TUA SQUADRA"}</div>
+                  <div style={{color:S.cream, fontSize:19, fontWeight:700, lineHeight:1.35}}>{e.text}</div>
+                  {e.pts ? (
+                    <div style={{marginTop:8, display:"inline-block", background:"rgba(255,142,142,.18)",
+                      color:"#ff8e8e", fontWeight:900, fontSize:13, padding:"4px 12px", borderRadius:20}}>
+                      −{e.pts} punti{own ? " (tu)" : ""}
+                    </div>
+                  ) : null}
+                </div>
+                );
+              })}
+              <div style={{textAlign:"center", marginTop:18, color:S.cream, opacity:.45, fontSize:11}}>
+                tocca per continuare
+              </div>
+            </div>
+          </div>
+          <style>{`@keyframes us-fade{from{opacity:0}to{opacity:1}} @keyframes us-pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}`}</style>
+        </div>
+      )}
+
       <div style={{maxWidth:620, margin:"0 auto", padding:"0 16px"}}>
         {/* contatore live */}
         <div style={{...panel, marginBottom:14, position:"sticky", top:8, zIndex:5}}>
@@ -829,9 +1101,10 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, onRestart }) {
+function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, onRestart }) {
   const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
-  const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason), [squad, sim, forcedSeason]);
+  const meta = useMemo(()=>({ coach, captain, superSub }), [coach, captain, superSub]);
+  const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason, meta), [squad, sim, forcedSeason, meta]);
   const [copied, setCopied] = useState(false);
   const [showSeason, setShowSeason] = useState(false);
   const [showStandings, setShowStandings] = useState(false);
@@ -843,6 +1116,7 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
       `⚽ ${season.GF}:${season.GA} · ${season.tier.emoji} ${season.tier.name}\n` +
       `(atteso: ${ordinale(season.expectedPos)})\n` +
       (captain ? `🅒 ${captain.n}` + (coach ? ` · 🎩 ${coach.name}` : "") + `\n` : (coach ? `🎩 ${coach.name}\n` : "")) +
+      (season.topScorers && season.topScorers[0] ? `👑 Capocannoniere: ${season.topScorers[0].name} (${season.topScorers[0].goals} gol)\n` : "") +
       squad.filter(Boolean).map(p=>`${p.slot}: ${p.n}`).join("\n");
     navigator.clipboard?.writeText(txt);
     setCopied(true); setTimeout(()=>setCopied(false), 2000);
@@ -969,6 +1243,11 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
 
         <PositionSummary season={season} />
 
+        <NewsBanner news={season.news} />
+        <TopScorers scorers={season.topScorers} />
+        <SeasonStory season={season} />
+
+
         {!showSeason && (
           <Pitch formation={formation} squad={squad} activeIdx={-1} hideRatings={false} />
         )}
@@ -1021,6 +1300,76 @@ function PositionSummary({ season }) {
         </div>
       </div>
       <div style={{textAlign:"center", marginTop:10, color:ccolor, fontWeight:700, fontSize:14}}>{comment}</div>
+    </div>
+  );
+}
+
+// ---- ONDATA 3: banner news scorrevole stile "Universo Sportivo" ----
+function NewsBanner({ news }) {
+  if (!news || news.length === 0) return null;
+  const line = news.join("   •   ");
+  return (
+    <div style={{marginTop:14, borderRadius:12, overflow:"hidden", border:`2px solid ${S.gold}`,
+      background:"linear-gradient(90deg, rgba(255,210,74,.12), rgba(0,0,0,.25))"}}>
+      <div style={{display:"flex", alignItems:"center"}}>
+        <div style={{background:S.gold, color:S.ink, fontWeight:900, fontSize:11, letterSpacing:1,
+          padding:"10px 12px", flexShrink:0, whiteSpace:"nowrap"}}>📰 UNIVERSO SPORTIVO</div>
+        <div style={{overflow:"hidden", flex:1, position:"relative", height:38}}>
+          <div style={{position:"absolute", whiteSpace:"nowrap", color:S.cream, fontSize:13, fontWeight:600,
+            lineHeight:"38px", paddingLeft:"100%", animation:"us-ticker 22s linear infinite"}}>
+            {line}   •   {line}
+          </div>
+        </div>
+      </div>
+      <style>{`@keyframes us-ticker { from{transform:translateX(0)} to{transform:translateX(-50%)} }`}</style>
+    </div>
+  );
+}
+
+// ---- ONDATA 3: capocannonieri della tua squadra ----
+function TopScorers({ scorers }) {
+  if (!scorers || scorers.length === 0) return null;
+  const max = scorers[0].goals || 1;
+  const medal = ["🥇","🥈","🥉"];
+  return (
+    <div style={{...panel, marginTop:14}}>
+      <div style={{color:S.gold, fontSize:13, fontWeight:900, letterSpacing:1.5, marginBottom:12}}>⚽ CAPOCANNONIERI</div>
+      <div style={{display:"flex", flexDirection:"column", gap:8}}>
+        {scorers.map((s, i) => (
+          <div key={s.name} style={{display:"flex", alignItems:"center", gap:10}}>
+            <span style={{width:22, textAlign:"center", fontSize:14}}>{medal[i] || `${i+1}.`}</span>
+            <span style={{flex:"0 0 130px", color:S.cream, fontSize:14, fontWeight:600,
+              overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{s.name}</span>
+            <div style={{flex:1, height:10, background:"rgba(255,255,255,.08)", borderRadius:6, overflow:"hidden"}}>
+              <div style={{width:`${Math.round(s.goals/max*100)}%`, height:"100%",
+                background:`linear-gradient(90deg, ${S.gold}, #e0a82e)`}} />
+            </div>
+            <span style={{flex:"0 0 auto", color:S.gold, fontWeight:900, fontSize:14, minWidth:28, textAlign:"right"}}>{s.goals}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---- ONDATA 3: racconto della stagione (eventi + momenti chiave) ----
+function SeasonStory({ season }) {
+  const items = [];
+  if (season.bestRun >= 3) items.push(`🔥 Miglior striscia: ${season.bestRun} vittorie di fila.`);
+  if (season.worstRun >= 2) items.push(`🧊 Periodo nero: ${season.worstRun} ko consecutivi.`);
+  if (season.biggestWin) items.push(`💥 Vittoria più larga: ${season.biggestWin.gf}-${season.biggestWin.ga} col ${season.biggestWin.opp}.`);
+  if (season.worstLoss) items.push(`😬 Sconfitta più pesante: ${season.worstLoss.ga}-${season.worstLoss.gf} col ${season.worstLoss.opp}.`);
+  (season.events || []).forEach(e => items.push(e));
+  if (items.length === 0) return null;
+  return (
+    <div style={{...panel, marginTop:14}}>
+      <div style={{color:S.gold, fontSize:13, fontWeight:900, letterSpacing:1.5, marginBottom:12}}>📖 LA STAGIONE IN BREVE</div>
+      <div style={{display:"flex", flexDirection:"column", gap:9}}>
+        {items.map((t, i) => (
+          <div key={i} style={{color:S.cream, fontSize:13, opacity:.9, lineHeight:1.4,
+            borderLeft:`3px solid ${S.line}`, paddingLeft:10}}>{t}</div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1179,14 +1528,17 @@ function BonusSelect({ squad, formation, usedIds, onConfirm }) {
 
   const confirm = () => {
     let finalSquad = squad;
+    let superSub = null;
     if (subPlayer && weakIdx >= 0) {
       finalSquad = [...squad];
-      finalSquad[weakIdx] = { ...subPlayer, slot: weakRole };
+      finalSquad[weakIdx] = { ...subPlayer, slot: weakRole, isSuperSub: true };
+      superSub = { ...subPlayer, slot: weakRole };
     }
     onConfirm({
       bonusTotal,
       coach: coach && coach.id !== "nessuno" ? coach : null,
       captain: capPlayer || null,
+      superSub,
       finalSquad,
     });
   };
@@ -1299,7 +1651,7 @@ export default function App() {
   const [draftMode, setDraftMode] = useState("position"); // position | squad
   const [pickMode, setPickMode] = useState("realistica"); // realistica | normale | facile
   const [seasonMode, setSeasonMode] = useState("random"); // random | scelta
-  const [chosenSeason, setChosenSeason] = useState(REAL_SEASONS[REAL_SEASONS.length-1]);
+  const [chosenSeason, setChosenSeason] = useState(ALL_SEASONS[ALL_SEASONS.length-1]);
 
   const formation = FORMATIONS[formationKey];
   const [squad, setSquad] = useState([]);        // array allineato a slots
@@ -1314,6 +1666,9 @@ export default function App() {
   const [bonusTotal, setBonusTotal] = useState(0);
   const [coach, setCoach] = useState(null);
   const [captain, setCaptain] = useState(null);
+  const [superSub, setSuperSub] = useState(null);
+  // Normale: 2 pescaggi (non tra gli ultimi) ESENTI dal vincolo 80+
+  const [freePicks, setFreePicks] = useState(new Set());
 
   // slot liberi (indici)
   const openSlots = useCallback((sq) =>
@@ -1322,15 +1677,27 @@ export default function App() {
 
   // avvia partita
   const startGame = useCallback(() => {
-    setSquad(new Array(formation.slots.length).fill(null));
+    const nSlots = formation.slots.length;
+    setSquad(new Array(nSlots).fill(null));
     setRound(0);
     setRerolls(DIFFICULTY[difficulty].rerolls);
     setUsedIds(new Set());
     setSpin(null);
     setPendingPlayer(null);
-    setBonusTotal(0); setCoach(null); setCaptain(null);
+    setBonusTotal(0); setCoach(null); setCaptain(null); setSuperSub(null);
+    // Normale: 2 pescaggi liberi dal vincolo 80+, scelti tra i primi (mai negli ultimi 3)
+    const fp = new Set();
+    if (pickMode === "normale") {
+      const maxIdx = Math.max(0, nSlots - 4); // indici 0..maxIdx ammessi
+      let guard = 0;
+      while (fp.size < 2 && guard < 50) {
+        fp.add(Math.floor(Math.random() * (maxIdx + 1)));
+        guard++;
+      }
+    }
+    setFreePicks(fp);
     setPhase("draft");
-  }, [formation, difficulty]);
+  }, [formation, difficulty, pickMode]);
 
   // ---- POSITION FIRST: spin con candidati validi per lo slot corrente ----
   const doSpinPosition = useCallback(() => {
@@ -1338,30 +1705,36 @@ export default function App() {
     const slotRole = formation.slots[round];
     setSpinning(true);
     const seasonPool = seasonMode === "scelta" ? [chosenSeason] : SEASONS;
-    // soglia 80+ richiesta in base alla modalità di pesca
-    const needs80 = pickMode === "facile" ||
-      (pickMode === "normale" && round < 9); // i primi 9 round garantiti 80+
+    // VINCOLO 80+ (Normale/Facile): OGNI pescata deve offrire almeno un giocatore da 80+
+    // tra i candidati. NON si escludono i sotto-80: restano nella lista, ma è garantito
+    // che ci sia sempre almeno una scelta da 80+ selezionabile.
+    // In Normale, 2 pescaggi (freePicks) sono ESENTI dal vincolo.
+    const wants80 = (pickMode === "facile" || pickMode === "normale") && !freePicks.has(round);
     let attempt = 0, found = null;
     while (attempt < 400 && !found) {
       const club = pick(CLUBS), season = pick(seasonPool);
-      let pool = PLAYERS.filter(p => p.c===club && p.s===season &&
+      const pool = PLAYERS.filter(p => p.c===club && p.s===season &&
         !usedIds.has(p.pid) && eligibleFor(p, slotRole));
-      if (needs80) pool = pool.filter(p => p.rt >= 80);
-      if (pool.length > 0) found = { club, season, candidates: pool.sort((a,b)=>b.rt-a.rt).slice(0,6) };
+      if (pool.length === 0) { attempt++; continue; }
+      // se richiediamo 80+, accetta questa pescata solo se contiene almeno un 80+
+      if (wants80 && !pool.some(p => p.rt >= 80)) { attempt++; continue; }
+      found = { club, season, candidates: pool.sort((a,b)=>b.rt-a.rt).slice(0,6) };
       attempt++;
     }
     if (!found) {
+      // fallback: cerca direttamente un 80+ idoneo (se esiste), altrimenti chiunque
       let pool = PLAYERS.filter(p => !usedIds.has(p.pid) && eligibleFor(p, slotRole)
         && (seasonMode !== "scelta" || p.s === chosenSeason));
-      if (needs80 && pool.some(p=>p.rt>=80)) pool = pool.filter(p=>p.rt>=80);
-      if (pool.length) {
-        const p0 = pick(pool);
+      const pool80 = pool.filter(p => p.rt >= 80);
+      const base = (wants80 && pool80.length) ? pool80 : pool;
+      if (base.length) {
+        const p0 = pick(base);
         const cand = PLAYERS.filter(p => p.c===p0.c && p.s===p0.s && !usedIds.has(p.pid) && eligibleFor(p,slotRole));
         found = { club: p0.c, season: p0.s, candidates: cand.sort((a,b)=>b.rt-a.rt).slice(0,6) };
       }
     }
     setTimeout(()=>{ setSpin(found); setSpinning(false); }, 1100);
-  }, [round, formation, usedIds, pickMode, seasonMode, chosenSeason]);
+  }, [round, formation, usedIds, pickMode, seasonMode, chosenSeason, freePicks]);
 
   // ---- SQUAD FIRST: spin club+stagione, candidati = chi entra in QUALSIASI slot libero ----
   const doSpinSquad = useCallback(() => {
@@ -1370,32 +1743,44 @@ export default function App() {
     if (open.length === 0) return;
     const filled = slots.length - open.length;
     const openRoles = [...new Set(open.map(o=>o.r))];
-    const fitsAny = (p) => openRoles.some(role => eligibleFor(p, role));
+    const allRoles = [...new Set(slots)];
+    const fitsAny = (p) => openRoles.some(role => eligibleFor(p, role));        // piazzabile ORA
+    const fitsFormation = (p) => allRoles.some(role => eligibleFor(p, role));   // idoneo a un ruolo della formazione
     setSpinning(true);
     const seasonPool = seasonMode === "scelta" ? [chosenSeason] : SEASONS;
-    const needs80 = pickMode === "facile" ||
-      (pickMode === "normale" && filled < 9);
+    // VINCOLO 80+ (Normale/Facile): ogni pescata deve offrire almeno un 80+ PIAZZABILE ora.
+    // In Normale, 2 pescaggi (freePicks, indicizzati sul n. di giocatori già piazzati) sono ESENTI.
+    const wants80 = (pickMode === "facile" || pickMode === "normale") && !freePicks.has(filled);
+    // mappa candidati di un club/stagione: include anche i non-piazzabili (ruolo pieno),
+    // marcati playable:false così l'utente li VEDE ma non può sceglierli.
+    const buildCands = (club, season) =>
+      PLAYERS.filter(p => p.c===club && p.s===season && !usedIds.has(p.pid) && fitsFormation(p))
+        .map(p => ({ ...p, playable: fitsAny(p) }))
+        .sort((a,b)=> (b.playable-a.playable) || (b.rt-a.rt))
+        .slice(0,10);
     let attempt = 0, found = null;
     while (attempt < 400 && !found) {
       const club = pick(CLUBS), season = pick(seasonPool);
-      let pool = PLAYERS.filter(p => p.c===club && p.s===season &&
-        !usedIds.has(p.pid) && fitsAny(p));
-      if (needs80) pool = pool.filter(p => p.rt >= 80);
-      if (pool.length > 0) found = { club, season, candidates: pool.sort((a,b)=>b.rt-a.rt).slice(0,8) };
+      // serve almeno un giocatore PIAZZABILE in questo club/stagione
+      const placeable = PLAYERS.filter(p => p.c===club && p.s===season && !usedIds.has(p.pid) && fitsAny(p));
+      if (placeable.length === 0) { attempt++; continue; }
+      // se richiediamo 80+, accetta solo se c'è un 80+ piazzabile
+      if (wants80 && !placeable.some(p => p.rt >= 80)) { attempt++; continue; }
+      found = { club, season, candidates: buildCands(club, season) };
       attempt++;
     }
     if (!found) {
       let pool = PLAYERS.filter(p => !usedIds.has(p.pid) && fitsAny(p)
         && (seasonMode !== "scelta" || p.s === chosenSeason));
-      if (needs80 && pool.some(p=>p.rt>=80)) pool = pool.filter(p=>p.rt>=80);
-      if (pool.length) {
-        const p0 = pick(pool);
-        const cand = PLAYERS.filter(p => p.c===p0.c && p.s===p0.s && !usedIds.has(p.pid) && fitsAny(p));
-        found = { club: p0.c, season: p0.s, candidates: cand.sort((a,b)=>b.rt-a.rt).slice(0,8) };
+      const pool80 = pool.filter(p => p.rt >= 80);
+      const base = (wants80 && pool80.length) ? pool80 : pool;
+      if (base.length) {
+        const p0 = pick(base);
+        found = { club: p0.c, season: p0.s, candidates: buildCands(p0.c, p0.s) };
       }
     }
     setTimeout(()=>{ setSpin(found); setSpinning(false); }, 1100);
-  }, [formation, squad, usedIds, pickMode, seasonMode, chosenSeason]);
+  }, [formation, squad, usedIds, pickMode, seasonMode, chosenSeason, freePicks]);
 
   const doSpin = draftMode === "squad" ? doSpinSquad : doSpinPosition;
 
@@ -1446,9 +1831,9 @@ export default function App() {
 
   // ============ RENDER ============
   if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,startGame}} />;
-  if (phase === "bonus") return <BonusSelect {...{squad, formation, usedIds, onConfirm:({bonusTotal,coach,captain,finalSquad})=>{ setSquad(finalSquad); if(finalSquad!==squad){ const s=new Set(usedIds); finalSquad.forEach(p=>p&&s.add(p.pid)); setUsedIds(s);} setBonusTotal(bonusTotal); setCoach(coach); setCaptain(captain); setPhase("season"); }}} />;
-  if (phase === "season") return <SeasonLive {...{squad, formation, forcedSeason, bonusTotal, onDone:()=>setPhase("result")}} />;
-  if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, onRestart:()=>setPhase("setup")}} />;
+  if (phase === "bonus") return <BonusSelect {...{squad, formation, usedIds, onConfirm:({bonusTotal,coach,captain,superSub,finalSquad})=>{ setSquad(finalSquad); if(finalSquad!==squad){ const s=new Set(usedIds); finalSquad.forEach(p=>p&&s.add(p.pid)); setUsedIds(s);} setBonusTotal(bonusTotal); setCoach(coach); setCaptain(captain); setSuperSub(superSub); setPhase("season"); }}} />;
+  if (phase === "season") return <SeasonLive {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, onDone:()=>setPhase("result")}} />;
+  if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, onRestart:()=>setPhase("setup")}} />;
 
   return (
     <Draft {...{formation, squad, round, filledCount, spin, spinning, doSpin, reroll, rerolls,
