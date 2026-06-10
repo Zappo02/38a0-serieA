@@ -1169,6 +1169,21 @@ function SeasonLive({ squad, formation, forcedSeason, bonusTotal = 0, coach = nu
 
 // ================== SCHERMATA RISULTATO ==================
 // helper: rettangolo con angoli arrotondati su canvas (compatibilità ampia)
+// helper: colore hex (#rrggbb) o named -> rgba con alpha
+function hexA(c, a) {
+  if (typeof c !== "string") return `rgba(255,210,74,${a})`;
+  let h = c.trim();
+  if (h[0] === "#") h = h.slice(1);
+  if (h.length === 3) h = h.split("").map(x=>x+x).join("");
+  if (h.length >= 6) {
+    const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
+    if (!isNaN(r) && !isNaN(g) && !isNaN(b)) return `rgba(${r},${g},${b},${a})`;
+  }
+  return `rgba(255,210,74,${a})`; // fallback oro
+}
+// helper: posizione abbreviata per la card (1º, 2º, ...)
+function ordinaleShort(n) { return `${n}º`; }
+
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x+r, y);
@@ -1200,7 +1215,7 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
     setCopied(true); setTimeout(()=>setCopied(false), 2000);
   };
 
-  // ---- CARD IMMAGINE 1080x1350 su canvas, scaricabile ----
+  // ---- CARD IMMAGINE 1080x1350 su canvas, scaricabile (instagrammabile) ----
   const [genState, setGenState] = useState("idle"); // idle | done
   const downloadCard = () => {
     const W = 1080, H = 1350;
@@ -1209,75 +1224,141 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
     const ctx = cv.getContext("2d");
     const filled = squad.filter(Boolean);
     const pos = POS[formation.key] || POS["4-3-3"];
+    const tcol = season.tier.color;
 
-    // sfondo
-    const bg = ctx.createLinearGradient(0,0,0,H);
-    bg.addColorStop(0, "#06241a"); bg.addColorStop(1, "#04140e");
+    // ---------- SFONDO: gradiente ricco + bagliore tier ----------
+    const bg = ctx.createLinearGradient(0,0,W,H);
+    bg.addColorStop(0, "#072b1f"); bg.addColorStop(0.55, "#04140e"); bg.addColorStop(1, "#020b07");
     ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
+    // alone colorato in alto (colore del tier)
+    const glow = ctx.createRadialGradient(W/2, 250, 60, W/2, 250, 620);
+    glow.addColorStop(0, hexA(tcol, 0.28)); glow.addColorStop(1, hexA(tcol, 0));
+    ctx.fillStyle = glow; ctx.fillRect(0,0,W,560);
 
-    // header
     ctx.textAlign = "center";
-    ctx.fillStyle = S.gold;
-    ctx.font = "900 64px Arial";
-    ctx.fillText("SERIE A 38-0", W/2, 96);
-    ctx.fillStyle = S.cream;
-    ctx.font = "600 30px Arial";
-    ctx.fillText(`Stagione ${season.season}  ·  ${formation.label}`, W/2, 142);
 
-    // tier + posizione (banner)
-    ctx.fillStyle = season.tier.color;
-    ctx.font = "900 58px Arial";
-    ctx.fillText(`${season.tier.emoji} ${season.tier.name.toUpperCase()}`, W/2, 220);
-    ctx.fillStyle = S.cream;
-    ctx.font = "700 38px Arial";
-    ctx.fillText(`${ordinale(season.realPos)} posto  ·  ${season.points} punti`, W/2, 272);
-    ctx.font = "500 28px Arial";
-    ctx.fillStyle = "rgba(244,236,216,.6)";
-    ctx.fillText(`${season.W}V  ${season.D}N  ${season.L}P   ·   ⚽${season.GF}:${season.GA}`, W/2, 314);
+    // ---------- ETICHETTA TIER (piccola, in alto) ----------
+    let y = 96;
+    if (careerMode) {
+      ctx.fillStyle = S.gold; ctx.font = "800 30px Arial";
+      ctx.fillText(`🗓️ CARRIERA · STAGIONE ${careerYear}`, W/2, y); y += 44;
+    }
+    // pillola tier
+    ctx.font = "900 40px Arial";
+    const tierTxt = `${season.tier.emoji} ${season.tier.name.toUpperCase()}`;
+    const ptw = ctx.measureText(tierTxt).width;
+    ctx.fillStyle = hexA(tcol, 0.18);
+    roundRect(ctx, W/2 - ptw/2 - 34, y - 38, ptw + 68, 60, 30); ctx.fill();
+    ctx.strokeStyle = tcol; ctx.lineWidth = 3;
+    roundRect(ctx, W/2 - ptw/2 - 34, y - 38, ptw + 68, 60, 30); ctx.stroke();
+    ctx.fillStyle = tcol;
+    ctx.fillText(tierTxt, W/2, y + 4);
+    y += 70;
 
-    // CAMPO
-    const fx = 70, fy = 360, fw = W - 140, fh = 820;
-    ctx.fillStyle = S.field;
-    roundRect(ctx, fx, fy, fw, fh, 24); ctx.fill();
-    // strisce campo
-    ctx.fillStyle = S.fieldHi;
-    for (let i=0;i<6;i+=2) ctx.fillRect(fx, fy + i*fh/6, fw, fh/6);
+    // ---------- NUMERO GIGANTE: i PUNTI ----------
+    ctx.fillStyle = S.cream;
+    ctx.font = "900 270px Arial";
+    ctx.fillText(String(season.points), W/2, y + 210);
+    ctx.fillStyle = hexA(S.cream, 0.55);
+    ctx.font = "800 38px Arial";
+    ctx.fillText("PUNTI IN CLASSIFICA", W/2, y + 262);
+    y += 308;
+
+    // ---------- RIGA NUMERI CHIAVE: posizione · V-N-P · gol ----------
+    const stats = [
+      { big: ordinaleShort(season.realPos), small: "POSTO" },
+      { big: `${season.W}-${season.D}-${season.L}`, small: "V · N · P" },
+      { big: `${season.GF}:${season.GA}`, small: "GOL F:S" },
+    ];
+    const colW = W / 3;
+    stats.forEach((s, i) => {
+      const cx = colW * i + colW/2;
+      ctx.fillStyle = S.gold; ctx.font = "900 72px Arial";
+      ctx.fillText(s.big, cx, y + 60);
+      ctx.fillStyle = hexA(S.cream, 0.5); ctx.font = "700 26px Arial";
+      ctx.fillText(s.small, cx, y + 100);
+      if (i > 0) { ctx.strokeStyle = hexA(S.cream, 0.15); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(colW*i, y+20); ctx.lineTo(colW*i, y+90); ctx.stroke(); }
+    });
+    y += 150;
+
+    // ---------- CAMPO + FORMAZIONE ----------
+    const fx = 60, fy = y, fw = W - 120, fh = 460;
+    // erba con gradiente
+    const grass = ctx.createLinearGradient(0, fy, 0, fy+fh);
+    grass.addColorStop(0, "#0e5e40"); grass.addColorStop(1, "#0a4630");
+    ctx.fillStyle = grass; roundRect(ctx, fx, fy, fw, fh, 28); ctx.fill();
+    // strisce
+    ctx.save();
+    roundRect(ctx, fx, fy, fw, fh, 28); ctx.clip();
+    ctx.fillStyle = "rgba(255,255,255,.04)";
+    for (let i=0;i<7;i+=2) ctx.fillRect(fx, fy + i*fh/7, fw, fh/7);
+    ctx.restore();
     // linee
-    ctx.strokeStyle = "rgba(255,255,255,.25)"; ctx.lineWidth = 3;
-    ctx.strokeRect(fx+14, fy+14, fw-28, fh-28);
-    ctx.beginPath(); ctx.moveTo(fx+14, fy+fh/2); ctx.lineTo(fx+fw-14, fy+fh/2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(fx+fw/2, fy+fh/2, 70, 0, 2*Math.PI); ctx.stroke();
-    // aree
-    ctx.strokeRect(fx+fw/2-110, fy+14, 220, 90);
-    ctx.strokeRect(fx+fw/2-110, fy+fh-104, 220, 90);
+    ctx.strokeStyle = "rgba(255,255,255,.3)"; ctx.lineWidth = 3;
+    ctx.strokeRect(fx+16, fy+16, fw-32, fh-32);
+    ctx.beginPath(); ctx.moveTo(fx+16, fy+fh/2); ctx.lineTo(fx+fw-16, fy+fh/2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(fx+fw/2, fy+fh/2, 56, 0, 2*Math.PI); ctx.stroke();
+    ctx.strokeRect(fx+fw/2-90, fy+16, 180, 70);
+    ctx.strokeRect(fx+fw/2-90, fy+fh-86, 180, 70);
 
-    // giocatori (y POS è dal basso = porta nostra in basso)
+    // capocannoniere della MIA squadra (per evidenziarlo sul campo)
+    const topName = season.topScorers && season.topScorers[0] ? season.topScorers[0].name : null;
+
     filled.forEach((p, i) => {
       const [px, py] = pos[i] || [50,50];
       const cx = fx + (px/100)*fw;
       const cy = fy + (py/100)*fh;
-      // disco
-      ctx.beginPath(); ctx.arc(cx, cy, 38, 0, 2*Math.PI);
-      ctx.fillStyle = S.gold; ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,.3)"; ctx.lineWidth = 2; ctx.stroke();
+      const isTop = topName && p.n === topName;
+      // disco: oro per il bomber, crema-tier per gli altri
+      const r = isTop ? 34 : 30;
+      if (isTop) {
+        const g = ctx.createRadialGradient(cx, cy, 4, cx, cy, r);
+        g.addColorStop(0, "#fff0b0"); g.addColorStop(1, S.gold);
+        ctx.fillStyle = g;
+      } else {
+        ctx.fillStyle = "#f4ecd8";
+      }
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI); ctx.fill();
+      ctx.strokeStyle = isTop ? "#b8860b" : "rgba(0,0,0,.35)"; ctx.lineWidth = isTop ? 4 : 2; ctx.stroke();
       // ruolo
-      ctx.fillStyle = S.ink; ctx.font = "900 22px Arial"; ctx.textAlign = "center";
-      ctx.fillText(p.slot, cx, cy+7);
-      // nome (riquadro scuro sotto)
-      const name = p.n.length > 16 ? p.n.slice(0,15)+"…" : p.n;
-      ctx.font = "700 22px Arial";
+      ctx.fillStyle = S.ink; ctx.font = "900 19px Arial"; ctx.textAlign = "center";
+      ctx.fillText(p.slot, cx, cy + 6);
+      // nome
+      const name = p.n.length > 14 ? p.n.slice(0,13)+"…" : p.n;
+      ctx.font = "700 19px Arial";
       const tw = ctx.measureText(name).width;
-      ctx.fillStyle = "rgba(0,0,0,.6)";
-      roundRect(ctx, cx - tw/2 - 10, cy+46, tw+20, 32, 8); ctx.fill();
-      ctx.fillStyle = S.cream;
-      ctx.fillText(name, cx, cy+68);
+      ctx.fillStyle = "rgba(0,0,0,.65)";
+      roundRect(ctx, cx - tw/2 - 9, cy + r + 6, tw + 18, 28, 7); ctx.fill();
+      ctx.fillStyle = isTop ? S.gold : S.cream;
+      ctx.fillText(name, cx, cy + r + 25);
     });
+    y = fy + fh + 56;
 
-    // footer
+    // ---------- FASCIA CAPOCANNONIERE ----------
+    if (season.topScorers && season.topScorers[0]) {
+      const ts = season.topScorers[0];
+      ctx.fillStyle = hexA(S.gold, 0.12);
+      roundRect(ctx, 60, y - 40, W - 120, 80, 18); ctx.fill();
+      ctx.strokeStyle = hexA(S.gold, 0.35); ctx.lineWidth = 2;
+      roundRect(ctx, 60, y - 40, W - 120, 80, 18); ctx.stroke();
+      ctx.textAlign = "left";
+      ctx.fillStyle = hexA(S.cream, 0.55); ctx.font = "700 24px Arial";
+      ctx.fillText("CAPOCANNONIERE", 96, y - 6);
+      ctx.fillStyle = S.cream; ctx.font = "800 38px Arial";
+      ctx.fillText(ts.name, 96, y + 30);
+      ctx.textAlign = "right";
+      ctx.fillStyle = S.gold; ctx.font = "900 48px Arial";
+      ctx.fillText(`${ts.goals} gol`, W - 96, y + 18);
+      ctx.textAlign = "center";
+    }
+
+    // ---------- FOOTER ----------
     ctx.textAlign = "center";
-    ctx.fillStyle = "rgba(244,236,216,.45)";
-    ctx.font = "500 26px Arial";
-    ctx.fillText("universosportivo.com", W/2, H-40);
+    ctx.fillStyle = hexA(S.gold, 0.85); ctx.font = "900 30px Arial";
+    ctx.fillText(`SERIE A 38-0 · ${season.season} · ${formation.label}`, W/2, H - 56);
+    ctx.fillStyle = hexA(S.cream, 0.4); ctx.font = "600 24px Arial";
+    ctx.fillText("universosportivo.com", W/2, H - 24);
 
     cv.toBlob((blob) => {
       const url = URL.createObjectURL(blob);
