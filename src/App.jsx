@@ -721,10 +721,14 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
           Costruisci il tuo XI e scopri se può chiudere una stagione perfetta: <b style={{color:S.gold}}>38 vittorie, 0 sconfitte.</b>
         </p>
 
-        <div style={{textAlign:"center", marginBottom:22}}>
+        <div style={{textAlign:"center", marginBottom:22, display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap"}}>
           <button onClick={()=>setShowInfo(true)} style={{...chip(false), display:"inline-block"}}>
             ℹ️ Info & punteggi
           </button>
+          <a href="https://universosportivo.com/quiz-calcio/" target="_blank" rel="noopener noreferrer"
+             style={{...chip(false), display:"inline-block", textDecoration:"none", color:S.gold, borderColor:hexA(S.gold,0.6)}}>
+            🧠 Quiz di calcio
+          </a>
         </div>
 
         <Label>Formazione</Label>
@@ -1198,22 +1202,8 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
   const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
   const meta = useMemo(()=>({ coach, captain, superSub }), [coach, captain, superSub]);
   const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason, meta), [squad, sim, forcedSeason, meta]);
-  const [copied, setCopied] = useState(false);
   const [showSeason, setShowSeason] = useState(false);
   const [showStandings, setShowStandings] = useState(false);
-
-  const ordinale = (n) => `${n}°`;
-  const share = () => {
-    const txt = `🏟️ Il mio Serie A 38-0 — stagione ${season.season} (${formation.label}):\n` +
-      `🏆 ${ordinale(season.realPos)} posto — ${season.points} pti (${season.W}V ${season.D}N ${season.L}P)\n` +
-      `⚽ ${season.GF}:${season.GA} · ${season.tier.emoji} ${season.tier.name}\n` +
-      `(atteso: ${ordinale(season.expectedPos)})\n` +
-      (captain ? `🅒 ${captain.n}` + (coach ? ` · 🎩 ${coach.name}` : "") + `\n` : (coach ? `🎩 ${coach.name}\n` : "")) +
-      (season.topScorers && season.topScorers[0] ? `👑 Capocannoniere: ${season.topScorers[0].name} (${season.topScorers[0].goals} gol)\n` : "") +
-      squad.filter(Boolean).map(p=>`${p.slot}: ${p.n}`).join("\n");
-    navigator.clipboard?.writeText(txt);
-    setCopied(true); setTimeout(()=>setCopied(false), 2000);
-  };
 
   // ---- CARD IMMAGINE 1080x1350 su canvas, scaricabile (instagrammabile) ----
   const [genState, setGenState] = useState("idle"); // idle | done
@@ -1294,7 +1284,7 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
     y += 150;
 
     // ---------- CAMPO + FORMAZIONE ----------
-    const fx = 60, fy = y, fw = W - 120, fh = 460;
+    const fx = 60, fy = y, fw = W - 120, fh = 516;
     // erba con gradiente
     const grass = ctx.createLinearGradient(0, fy, 0, fy+fh);
     grass.addColorStop(0, "#0e5e40"); grass.addColorStop(1, "#0a4630");
@@ -1320,7 +1310,8 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
     filled.forEach((p, i) => {
       const [px, py] = pos[i] || [50,50];
       let cx = fx + (px/100)*fw;
-      const cy = fy + (py/100)*fh;
+      // comprimo il range verticale in 6%..82% del campo, così nessun nome esce dal fondo
+      const cy = fy + (0.06 + (py/100) * 0.76) * fh;
       const isTop = topName && p.n === topName;
       const isCapt = captPid != null && p.pid === captPid;
       const r = isTop ? 34 : 30;
@@ -1383,7 +1374,7 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
       ctx.fillText(finalLabel, fx + 36, fy + 52);
       ctx.textAlign = "center";
     }
-    y = fy + fh + 56;
+    y = fy + fh + 50;
 
     // ---------- FASCIA CAPOCANNONIERE ----------
     if (season.topScorers && season.topScorers[0]) {
@@ -1406,9 +1397,9 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
     // ---------- FOOTER ----------
     ctx.textAlign = "center";
     ctx.fillStyle = hexA(S.gold, 0.85); ctx.font = "900 30px Arial";
-    ctx.fillText(`SERIE A 38-0 · ${season.season} · ${formation.label}`, W/2, H - 56);
+    ctx.fillText(`SERIE A 38-0 · ${season.season} · ${formation.label}`, W/2, H - 50);
     ctx.fillStyle = hexA(S.cream, 0.4); ctx.font = "600 24px Arial";
-    ctx.fillText("universosportivo.com", W/2, H - 24);
+    ctx.fillText("universosportivo.com", W/2, H - 18);
 
     cv.toBlob((blob) => {
       const url = URL.createObjectURL(blob);
@@ -1480,7 +1471,10 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
           <button onClick={downloadCard} style={{...bigBtnSm, background:S.gold, color:S.ink}}>
             {genState==="done" ? "✓ Salvata!" : "📲 Salva immagine"}
           </button>
-          <button onClick={share} style={bigBtnSm}>{copied?"✓ Copiato!":"📋 Copia testo"}</button>
+          <a href="https://universosportivo.com/quiz-calcio/" target="_blank" rel="noopener noreferrer"
+             style={{...bigBtnSm, background:"#3aa0ff", color:"#fff", textDecoration:"none", display:"inline-flex", alignItems:"center"}}>
+            🧠 Gioca ai quiz di calcio
+          </a>
           {careerMode
             ? <button onClick={()=>onAdvance(season.expectedPos - season.realPos)} style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900}}>▶ PROSSIMA STAGIONE</button>
             : <button onClick={onRestart} style={{...bigBtnSm, background:"transparent", border:`2px solid ${S.gold}`, color:S.gold}}>↻ Rigioca</button>}
