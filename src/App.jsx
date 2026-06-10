@@ -1237,15 +1237,20 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
 
     ctx.textAlign = "center";
 
-    // ---------- ETICHETTA TIER (piccola, in alto) ----------
+    // ---------- ETICHETTA TIER (piccola, in alto, sempre dentro i margini) ----------
     let y = 96;
     if (careerMode) {
       ctx.fillStyle = S.gold; ctx.font = "800 30px Arial";
       ctx.fillText(`🗓️ CARRIERA · STAGIONE ${careerYear}`, W/2, y); y += 44;
     }
-    // pillola tier
-    ctx.font = "900 40px Arial";
+    // pillola tier — font ridotto se troppo larga, così resta nei 60px di margine
     const tierTxt = `${season.tier.emoji} ${season.tier.name.toUpperCase()}`;
+    let tierFs = 40;
+    ctx.font = `900 ${tierFs}px Arial`;
+    const maxPill = W - 200; // larghezza massima pillola
+    while (ctx.measureText(tierTxt).width + 68 > maxPill && tierFs > 26) {
+      tierFs -= 2; ctx.font = `900 ${tierFs}px Arial`;
+    }
     const ptw = ctx.measureText(tierTxt).width;
     ctx.fillStyle = hexA(tcol, 0.18);
     roundRect(ctx, W/2 - ptw/2 - 34, y - 38, ptw + 68, 60, 30); ctx.fill();
@@ -1255,19 +1260,25 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
     ctx.fillText(tierTxt, W/2, y + 4);
     y += 70;
 
-    // ---------- NUMERO GIGANTE: i PUNTI ----------
+    // ---------- NUMERO GIGANTE: il RECORD V-N-P ----------
+    const vnp = `${season.W}-${season.D}-${season.L}`;
     ctx.fillStyle = S.cream;
-    ctx.font = "900 270px Arial";
-    ctx.fillText(String(season.points), W/2, y + 210);
+    // font che si adatta alla larghezza (record a 3 cifre per parte può essere lungo)
+    let recFs = 200;
+    ctx.font = `900 ${recFs}px Arial`;
+    while (ctx.measureText(vnp).width > W - 140 && recFs > 110) {
+      recFs -= 6; ctx.font = `900 ${recFs}px Arial`;
+    }
+    ctx.fillText(vnp, W/2, y + 170);
     ctx.fillStyle = hexA(S.cream, 0.55);
-    ctx.font = "800 38px Arial";
-    ctx.fillText("PUNTI IN CLASSIFICA", W/2, y + 262);
-    y += 308;
+    ctx.font = "800 36px Arial";
+    ctx.fillText("VITTORIE · PAREGGI · SCONFITTE", W/2, y + 230);
+    y += 280;
 
-    // ---------- RIGA NUMERI CHIAVE: posizione · V-N-P · gol ----------
+    // ---------- RIGA NUMERI CHIAVE: punti · posizione · gol ----------
     const stats = [
+      { big: String(season.points), small: "PUNTI" },
       { big: ordinaleShort(season.realPos), small: "POSTO" },
-      { big: `${season.W}-${season.D}-${season.L}`, small: "V · N · P" },
       { big: `${season.GF}:${season.GA}`, small: "GOL F:S" },
     ];
     const colW = W / 3;
@@ -1302,16 +1313,20 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
     ctx.strokeRect(fx+fw/2-90, fy+16, 180, 70);
     ctx.strokeRect(fx+fw/2-90, fy+fh-86, 180, 70);
 
-    // capocannoniere della MIA squadra (per evidenziarlo sul campo)
+    // capocannoniere e capitano della MIA squadra (per evidenziarli sul campo)
     const topName = season.topScorers && season.topScorers[0] ? season.topScorers[0].name : null;
+    const captPid = captain ? captain.pid : null;
 
     filled.forEach((p, i) => {
       const [px, py] = pos[i] || [50,50];
-      const cx = fx + (px/100)*fw;
+      let cx = fx + (px/100)*fw;
       const cy = fy + (py/100)*fh;
       const isTop = topName && p.n === topName;
-      // disco: oro per il bomber, crema-tier per gli altri
+      const isCapt = captPid != null && p.pid === captPid;
       const r = isTop ? 34 : 30;
+      // CLAMP orizzontale del disco entro il campo
+      cx = Math.max(fx + r + 10, Math.min(fx + fw - r - 10, cx));
+      // disco: oro per il bomber, crema per gli altri
       if (isTop) {
         const g = ctx.createRadialGradient(cx, cy, 4, cx, cy, r);
         g.addColorStop(0, "#fff0b0"); g.addColorStop(1, S.gold);
@@ -1324,15 +1339,50 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
       // ruolo
       ctx.fillStyle = S.ink; ctx.font = "900 19px Arial"; ctx.textAlign = "center";
       ctx.fillText(p.slot, cx, cy + 6);
-      // nome
-      const name = p.n.length > 14 ? p.n.slice(0,13)+"…" : p.n;
+      // badge CAPITANO: pastiglia "C" in alto a destra del disco
+      if (isCapt) {
+        const bx = cx + r - 4, by = cy - r + 4;
+        ctx.beginPath(); ctx.arc(bx, by, 14, 0, 2*Math.PI);
+        ctx.fillStyle = "#3aa0ff"; ctx.fill();
+        ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = "#fff"; ctx.font = "900 17px Arial";
+        ctx.fillText("C", bx, by + 6);
+      }
+      // nome (riquadro scuro), troncato e con larghezza limitata; box clampato nei bordi
+      let name = p.n.length > 14 ? p.n.slice(0,13)+"…" : p.n;
       ctx.font = "700 19px Arial";
-      const tw = ctx.measureText(name).width;
+      let tw = ctx.measureText(name).width;
+      const maxNameW = fw - 24; // mai più largo del campo
+      while (tw > maxNameW && name.length > 4) { name = name.slice(0, name.length-2)+"…"; tw = ctx.measureText(name).width; }
+      let boxX = cx - tw/2 - 9;
+      boxX = Math.max(fx + 8, Math.min(fx + fw - tw - 26, boxX)); // clamp orizzontale del box
       ctx.fillStyle = "rgba(0,0,0,.65)";
-      roundRect(ctx, cx - tw/2 - 9, cy + r + 6, tw + 18, 28, 7); ctx.fill();
+      roundRect(ctx, boxX, cy + r + 6, tw + 18, 28, 7); ctx.fill();
       ctx.fillStyle = isTop ? S.gold : S.cream;
-      ctx.fillText(name, cx, cy + r + 25);
+      ctx.textAlign = "left";
+      ctx.fillText(name, boxX + 9, cy + r + 25);
+      ctx.textAlign = "center";
     });
+
+    // ---------- ALLENATORE: cartellino in alto a sinistra DENTRO il campo ----------
+    if (coach) {
+      ctx.textAlign = "left";
+      const label = `🎩 ${coach.name}`;
+      ctx.font = "800 24px Arial";
+      let cw = ctx.measureText(label).width;
+      const maxCoachW = fw - 60;
+      let cname = coach.name;
+      while (cw > maxCoachW && cname.length > 4) { cname = cname.slice(0, cname.length-2)+"…"; cw = ctx.measureText(`🎩 ${cname}`).width; }
+      const finalLabel = `🎩 ${cname}`;
+      cw = ctx.measureText(finalLabel).width;
+      ctx.fillStyle = "rgba(0,0,0,.6)";
+      roundRect(ctx, fx + 22, fy + 22, cw + 28, 46, 12); ctx.fill();
+      ctx.strokeStyle = hexA(S.gold, 0.5); ctx.lineWidth = 2;
+      roundRect(ctx, fx + 22, fy + 22, cw + 28, 46, 12); ctx.stroke();
+      ctx.fillStyle = S.gold;
+      ctx.fillText(finalLabel, fx + 36, fy + 52);
+      ctx.textAlign = "center";
+    }
     y = fy + fh + 56;
 
     // ---------- FASCIA CAPOCANNONIERE ----------
