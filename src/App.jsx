@@ -731,6 +731,14 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
           </a>
         </div>
 
+        <div style={{textAlign:"center", marginBottom:22}}>
+          <a href="https://universosportivo.com/7-0-mondiale/" target="_blank" rel="noopener noreferrer"
+             style={{...chip(false), display:"inline-block", textDecoration:"none", color:"#fff",
+                     background:"#3aa0ff", borderColor:"#3aa0ff", fontWeight:700}}>
+            🌍 Gioca il Mondiale con l'Italia (e non)! Il nostro 7-0
+          </a>
+        </div>
+
         <Label>Formazione</Label>
         <div style={chipRow}>
           {Object.keys(FORMATIONS).map(k => (
@@ -781,6 +789,16 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
             ))}
           </div>
         )}
+
+        <div style={{marginTop:10}}>
+          <button disabled aria-disabled="true" style={{
+            ...chip(false), width:"100%", cursor:"not-allowed", opacity:.55,
+            position:"relative", borderStyle:"dashed",
+          }}>
+            🏆 Coppa Italia
+            <span style={{display:"block", fontSize:10, opacity:.85, fontWeight:400, color:S.gold}}>in uscita il 28 giugno</span>
+          </button>
+        </div>
 
         <Label>Difficoltà</Label>
         <div style={chipRow}>
@@ -1474,6 +1492,10 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
           <a href="https://universosportivo.com/quiz-calcio/" target="_blank" rel="noopener noreferrer"
              style={{...bigBtnSm, background:"#3aa0ff", color:"#fff", textDecoration:"none", display:"inline-flex", alignItems:"center"}}>
             🧠 Gioca ai quiz di calcio
+          </a>
+          <a href="https://universosportivo.com/7-0-mondiale/" target="_blank" rel="noopener noreferrer"
+             style={{...bigBtnSm, background:"#2e7d32", color:"#fff", textDecoration:"none", display:"inline-flex", alignItems:"center"}}>
+            🌍 Gioca il nostro 7-0 Mondiale
           </a>
           {careerMode
             ? <button onClick={()=>onAdvance(season.expectedPos - season.realPos)} style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900}}>▶ PROSSIMA STAGIONE</button>
