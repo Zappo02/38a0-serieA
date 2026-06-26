@@ -98,6 +98,19 @@ const CLUBS = [...new Set(PLAYERS.map(p => p.c))].sort();
 const SEASONS = [...new Set(PLAYERS.map(p => p.s))].sort();
 // stagioni reali (escluse le Legends): usate per simulare gli avversari del campionato
 const REAL_SEASONS = SEASONS.filter(s => s !== "Legends");
+// club selezionabili nella Modalità Squadra: quelli con rose reali in almeno 3 stagioni
+// (così c'è varietà di epoche e abbastanza giocatori per ogni ruolo). Escluse Legends.
+const TEAM_LIST = (() => {
+  const seasonsByClub = {};
+  PLAYERS.forEach(p => {
+    if (p.s === "Legends") return;
+    (seasonsByClub[p.c] = seasonsByClub[p.c] || new Set()).add(p.s);
+  });
+  return Object.entries(seasonsByClub)
+    .filter(([, s]) => s.size >= 3)
+    .map(([c]) => c)
+    .sort();
+})();
 // stagioni con rose troppo incomplete: le rose si possono pescare nel draft per
 // rinforzare la squadra, ma NON vengono mai simulate come campionato giocato.
 const INCOMPLETE_SEASONS = ["2004-05", "2005-06"];
@@ -285,10 +298,13 @@ const ALL_SEASONS = REAL_SEASONS.filter(s => !INCOMPLETE_SEASONS.includes(s));
 
 // avversarie reali di una stagione: tutti i club dell'annata, poi tieni le 19 più forti
 // (così con la tua squadra il campionato è sempre a 20). Toglie le più deboli se necessario.
-function opponentsForSeason(season) {
+// excludeClub: in Modalità Squadra prendi TU il posto di quel club, quindi va rimosso dalle
+// avversarie; al suo posto entra automaticamente la 20ª per forza (lo slice(0,19) ripesca).
+function opponentsForSeason(season, excludeClub = null) {
   return Object.entries(CLUB_STRENGTH_BY_SEASON)
     .filter(([k]) => k.endsWith("|"+season))
     .map(([k, str]) => ({ club: k.split("|")[0], str, season }))
+    .filter(o => o.club !== excludeClub)
     .sort((a,b)=>b.str-a.str)
     .slice(0, 19);
 }
@@ -355,7 +371,7 @@ function simulateSeason(squad, baseSim, forcedSeason, meta = {}) {
     const seasonIdx = Math.floor(mulberry32(seed ^ 0x5bf03635)() * ALL_SEASONS.length);
     playedSeason = ALL_SEASONS[seasonIdx];
   }
-  const opponents = opponentsForSeason(playedSeason);
+  const opponents = opponentsForSeason(playedSeason, meta.excludeClub || null);
 
   // calendario: avversarie reali della stagione, andata e ritorno
   const fixtures = buildFixtures(rng, opponents);
@@ -709,7 +725,7 @@ function InfoModal({ onClose }) {
 
 function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draftMode, setDraftMode,
                  pickMode, setPickMode, seasonMode, setSeasonMode, chosenSeason, setChosenSeason,
-                 careerMode, setCareerMode, startGame }) {
+                 careerMode, setCareerMode, teamMode, setTeamMode, chosenTeam, setChosenTeam, startGame }) {
   const [showInfo, setShowInfo] = useState(false);
   return (
     <div style={wrap}>
@@ -799,6 +815,27 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
             <span style={{display:"block", fontSize:10, opacity:.85, fontWeight:400, color:S.gold}}>in uscita il 28 giugno</span>
           </button>
         </div>
+
+        <Label>Modalità Squadra <span style={{color:S.gold, fontSize:10}}>NUOVO</span></Label>
+        <div style={chipRow}>
+          <button onClick={()=>setTeamMode(false)} style={chip(!teamMode)}>
+            Tutta la Serie A
+            <span style={{display:"block", fontSize:10, opacity:.7, fontWeight:400}}>pesca da ogni club</span>
+          </button>
+          <button onClick={()=>setTeamMode(true)} style={chip(teamMode)}>
+            ⚽ Una squadra
+            <span style={{display:"block", fontSize:10, opacity:.7, fontWeight:400}}>solo le rose di un club, che prende il tuo posto in classifica</span>
+          </button>
+        </div>
+        {teamMode && (
+          <div style={{...chipRow, marginTop:4, maxHeight:170, overflowY:"auto"}}>
+            {TEAM_LIST.map(c => (
+              <button key={c} onClick={()=>setChosenTeam(c)} style={{...chip(chosenTeam===c), fontSize:12, padding:"7px 10px"}}>
+                {c}
+              </button>
+            ))}
+          </div>
+        )}
 
         <Label>Difficoltà</Label>
         <div style={chipRow}>
@@ -1015,9 +1052,9 @@ function Draft({ formation, squad, round, filledCount, spin, spinning, doSpin, r
 }
 
 // ================== SIMULAZIONE LIVE PARTITA PER PARTITA ==================
-function SeasonLive({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, onDone }) {
+function SeasonLive({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, excludeClub = null, onDone }) {
   const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
-  const meta = useMemo(()=>({ coach, captain, superSub }), [coach, captain, superSub]);
+  const meta = useMemo(()=>({ coach, captain, superSub, excludeClub }), [coach, captain, superSub, excludeClub]);
   const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason, meta), [squad, sim, forcedSeason, meta]);
   const [shown, setShown] = useState(0);   // quante partite mostrate
   const [pausedEvent, setPausedEvent] = useState(null); // evento mostrato a tutto schermo
@@ -1216,9 +1253,9 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, careerMode = false, careerYear = 1, onRestart, onAdvance }) {
+function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, excludeClub = null, careerMode = false, careerYear = 1, onRestart, onAdvance }) {
   const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
-  const meta = useMemo(()=>({ coach, captain, superSub }), [coach, captain, superSub]);
+  const meta = useMemo(()=>({ coach, captain, superSub, excludeClub }), [coach, captain, superSub, excludeClub]);
   const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason, meta), [squad, sim, forcedSeason, meta]);
   const [showSeason, setShowSeason] = useState(false);
   const [showStandings, setShowStandings] = useState(false);
@@ -1713,7 +1750,7 @@ function weakestIdx(squad) {
   return idx;
 }
 
-function BonusSelect({ squad, formation, usedIds, onConfirm }) {
+function BonusSelect({ squad, formation, usedIds, teamClub = null, onConfirm }) {
   const filled = squad.filter(Boolean);
   // CAPITANO
   const [captainPid, setCaptainPid] = useState(null);
@@ -1734,14 +1771,14 @@ function BonusSelect({ squad, formation, usedIds, onConfirm }) {
     setSubSpinning(true); setSubPlayer(null);
     let attempt = 0, found = null;
     while (attempt < 400 && !found) {
-      const club = pick(CLUBS), season = pick(SEASONS);
+      const club = teamClub || pick(CLUBS), season = pick(SEASONS);
       const pool = PLAYERS.filter(p => p.c===club && p.s===season &&
         !usedIds.has(p.pid) && eligibleFor(p, weakRole) && p.rt > weakPlayer.rt);
       if (pool.length > 0) found = { club, season, candidates: pool.sort((a,b)=>b.rt-a.rt).slice(0,6) };
       attempt++;
     }
     if (!found) {
-      const pool = PLAYERS.filter(p => !usedIds.has(p.pid) && eligibleFor(p, weakRole) && p.rt > weakPlayer.rt);
+      const pool = PLAYERS.filter(p => !usedIds.has(p.pid) && eligibleFor(p, weakRole) && p.rt > weakPlayer.rt && (teamClub ? p.c===teamClub : true));
       if (pool.length) {
         const p0 = pick(pool);
         const cand = PLAYERS.filter(p => p.c===p0.c && p.s===p0.s && !usedIds.has(p.pid) && eligibleFor(p,weakRole) && p.rt>weakPlayer.rt);
@@ -1749,7 +1786,7 @@ function BonusSelect({ squad, formation, usedIds, onConfirm }) {
       }
     }
     setTimeout(()=>{ setSubSpin(found); setSubSpinning(false); if(!found) setSubDone(true); }, 1000);
-  }, [weakRole, weakPlayer, usedIds]);
+  }, [weakRole, weakPlayer, usedIds, teamClub]);
 
   // calcolo bonus totale + squad finale
   const coach = COACHES.find(c=>c.id===coachId);
@@ -1879,7 +1916,7 @@ function BonusSelect({ squad, formation, usedIds, onConfirm }) {
 }
 
 // ================== ONDATA 4: MERCATO + EVOLUZIONE (fine stagione carriera) ==================
-function Market({ squad, formation, usedIds, forcedSeason, careerYear, careerEvo, difficulty = "normal", onConfirm }) {
+function Market({ squad, formation, usedIds, forcedSeason, careerYear, careerEvo, difficulty = "normal", teamClub = null, onConfirm }) {
   const MAX_SUBS = 3;
   const BASE_REROLLS = DIFFICULTY[difficulty]?.rerolls ?? 0; // rigirate per sostituzione = reroll della modalità
   const [roster, setRoster] = useState(squad);
@@ -1890,27 +1927,28 @@ function Market({ squad, formation, usedIds, forcedSeason, careerYear, careerEvo
   const [spinning, setSpinning] = useState(false);
   const [rerollsLeft, setRerollsLeft] = useState(BASE_REROLLS); // rigirate residue per la sostituzione corrente
 
-  const seasonPool = forcedSeason ? [forcedSeason] : SEASONS;
+  // in Modalità Squadra i rimpiazzi vengono SOLO dalle rose del club (tutte le stagioni)
+  const seasonPool = teamClub ? REAL_SEASONS : (forcedSeason ? [forcedSeason] : SEASONS);
 
   const doSpin = useCallback((slotIdx) => {
     const slotRole = formation.slots[slotIdx];
     setSpinning(true); setSpin(null);
     let attempt = 0, found = null;
     while (attempt < 400 && !found) {
-      const club = pick(CLUBS), season = pick(seasonPool);
+      const club = teamClub || pick(CLUBS), season = pick(seasonPool);
       const pool = PLAYERS.filter(p => p.c===club && p.s===season && !ids.has(p.pid) && eligibleFor(p, slotRole));
       if (pool.length) found = { club, season, candidates: pool.sort((a,b)=>b.rt-a.rt).slice(0,6) };
       attempt++;
     }
     if (!found) {
-      const pool = PLAYERS.filter(p => !ids.has(p.pid) && eligibleFor(p, slotRole) && (!forcedSeason || p.s===forcedSeason));
+      const pool = PLAYERS.filter(p => !ids.has(p.pid) && eligibleFor(p, slotRole) && (teamClub ? p.c===teamClub : (!forcedSeason || p.s===forcedSeason)));
       if (pool.length) { const p0=pick(pool);
         const cand = PLAYERS.filter(p=>p.c===p0.c && p.s===p0.s && !ids.has(p.pid) && eligibleFor(p,slotRole));
         found = { club:p0.c, season:p0.s, candidates:cand.sort((a,b)=>b.rt-a.rt).slice(0,6) };
       }
     }
     setTimeout(()=>{ setSpin(found); setSpinning(false); }, 900);
-  }, [formation, ids, seasonPool, forcedSeason]);
+  }, [formation, ids, seasonPool, forcedSeason, teamClub]);
 
   const startSub = (slotIdx) => { if (subsLeft<=0) return; setTargetIdx(slotIdx); setRerollsLeft(BASE_REROLLS); doSpin(slotIdx); };
   const confirmSub = (player) => {
@@ -2009,6 +2047,9 @@ export default function App() {
   const [pickMode, setPickMode] = useState("realistica"); // realistica | normale | facile
   const [seasonMode, setSeasonMode] = useState("random"); // random | scelta
   const [chosenSeason, setChosenSeason] = useState(ALL_SEASONS[ALL_SEASONS.length-1]);
+  // ---- Modalità Squadra: pesca solo dalle rose di un club, che prende il tuo posto in campionato ----
+  const [teamMode, setTeamMode] = useState(false);
+  const [chosenTeam, setChosenTeam] = useState("Roma");
 
   const formation = FORMATIONS[formationKey];
   const [squad, setSquad] = useState([]);        // array allineato a slots
@@ -2069,15 +2110,16 @@ export default function App() {
     if (round >= formation.slots.length) return;
     const slotRole = formation.slots[round];
     setSpinning(true);
-    const seasonPool = seasonMode === "scelta" ? [chosenSeason] : SEASONS;
+    const seasonPool = teamMode ? REAL_SEASONS : (seasonMode === "scelta" ? [chosenSeason] : SEASONS);
     // VINCOLO 80+ (Normale/Facile): OGNI pescata deve offrire almeno un giocatore da 80+
     // tra i candidati. NON si escludono i sotto-80: restano nella lista, ma è garantito
     // che ci sia sempre almeno una scelta da 80+ selezionabile.
     // In Normale, 5 pescaggi (freePicks) sono ESENTI dal vincolo.
-    const wants80 = (pickMode === "facile" || pickMode === "normale") && !freePicks.has(round);
+    // In Modalità Squadra: pesca LIBERA dalla rosa del club, nessun vincolo 80+.
+    const wants80 = !teamMode && (pickMode === "facile" || pickMode === "normale") && !freePicks.has(round);
     let attempt = 0, found = null;
     while (attempt < 400 && !found) {
-      const club = pick(CLUBS), season = pick(seasonPool);
+      const club = teamMode ? chosenTeam : pick(CLUBS), season = pick(seasonPool);
       const pool = PLAYERS.filter(p => p.c===club && p.s===season &&
         !usedIds.has(p.pid) && eligibleFor(p, slotRole));
       if (pool.length === 0) { attempt++; continue; }
@@ -2089,7 +2131,7 @@ export default function App() {
     if (!found) {
       // fallback: cerca direttamente un 80+ idoneo (se esiste), altrimenti chiunque
       let pool = PLAYERS.filter(p => !usedIds.has(p.pid) && eligibleFor(p, slotRole)
-        && (seasonMode !== "scelta" || p.s === chosenSeason));
+        && (teamMode ? p.c === chosenTeam : (seasonMode !== "scelta" || p.s === chosenSeason)));
       const pool80 = pool.filter(p => p.rt >= 80);
       const base = (wants80 && pool80.length) ? pool80 : pool;
       if (base.length) {
@@ -2099,7 +2141,7 @@ export default function App() {
       }
     }
     setTimeout(()=>{ setSpin(found); setSpinning(false); }, 1100);
-  }, [round, formation, usedIds, pickMode, seasonMode, chosenSeason, freePicks]);
+  }, [round, formation, usedIds, pickMode, seasonMode, chosenSeason, freePicks, teamMode, chosenTeam]);
 
   // ---- SQUAD FIRST: spin club+stagione, candidati = chi entra in QUALSIASI slot libero ----
   const doSpinSquad = useCallback(() => {
@@ -2112,10 +2154,11 @@ export default function App() {
     const fitsAny = (p) => openRoles.some(role => eligibleFor(p, role));        // piazzabile ORA
     const fitsFormation = (p) => allRoles.some(role => eligibleFor(p, role));   // idoneo a un ruolo della formazione
     setSpinning(true);
-    const seasonPool = seasonMode === "scelta" ? [chosenSeason] : SEASONS;
+    const seasonPool = teamMode ? REAL_SEASONS : (seasonMode === "scelta" ? [chosenSeason] : SEASONS);
     // VINCOLO 80+ (Normale/Facile): ogni pescata deve offrire almeno un 80+ PIAZZABILE ora.
     // In Normale, 5 pescaggi (freePicks, indicizzati sul n. di giocatori già piazzati) sono ESENTI.
-    const wants80 = (pickMode === "facile" || pickMode === "normale") && !freePicks.has(filled);
+    // In Modalità Squadra: pesca LIBERA dalla rosa del club, nessun vincolo 80+.
+    const wants80 = !teamMode && (pickMode === "facile" || pickMode === "normale") && !freePicks.has(filled);
     // mappa candidati di un club/stagione: include anche i non-piazzabili (ruolo pieno),
     // marcati playable:false così l'utente li VEDE ma non può sceglierli.
     const buildCands = (club, season) =>
@@ -2125,7 +2168,7 @@ export default function App() {
         .slice(0,10);
     let attempt = 0, found = null;
     while (attempt < 400 && !found) {
-      const club = pick(CLUBS), season = pick(seasonPool);
+      const club = teamMode ? chosenTeam : pick(CLUBS), season = pick(seasonPool);
       // serve almeno un giocatore PIAZZABILE in questo club/stagione
       const placeable = PLAYERS.filter(p => p.c===club && p.s===season && !usedIds.has(p.pid) && fitsAny(p));
       if (placeable.length === 0) { attempt++; continue; }
@@ -2136,7 +2179,7 @@ export default function App() {
     }
     if (!found) {
       let pool = PLAYERS.filter(p => !usedIds.has(p.pid) && fitsAny(p)
-        && (seasonMode !== "scelta" || p.s === chosenSeason));
+        && (teamMode ? p.c === chosenTeam : (seasonMode !== "scelta" || p.s === chosenSeason)));
       const pool80 = pool.filter(p => p.rt >= 80);
       const base = (wants80 && pool80.length) ? pool80 : pool;
       if (base.length) {
@@ -2145,7 +2188,7 @@ export default function App() {
       }
     }
     setTimeout(()=>{ setSpin(found); setSpinning(false); }, 1100);
-  }, [formation, squad, usedIds, pickMode, seasonMode, chosenSeason, freePicks]);
+  }, [formation, squad, usedIds, pickMode, seasonMode, chosenSeason, freePicks, teamMode, chosenTeam]);
 
   const doSpin = draftMode === "squad" ? doSpinSquad : doSpinPosition;
 
@@ -2215,11 +2258,11 @@ export default function App() {
   }, []);
 
   // ============ RENDER ============
-  if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,careerMode,setCareerMode,startGame}} />;
-  if (phase === "bonus") return <BonusSelect {...{squad, formation, usedIds, onConfirm:({bonusTotal,coach,captain,superSub,finalSquad})=>{ setSquad(finalSquad); if(finalSquad!==squad){ const s=new Set(usedIds); finalSquad.forEach(p=>p&&s.add(p.pid)); setUsedIds(s);} setBonusTotal(bonusTotal); setCoach(coach); setCaptain(captain); setSuperSub(superSub); setPhase("season"); }}} />;
-  if (phase === "season") return <SeasonLive {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, onDone:()=>setPhase("result")}} />;
-  if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, careerMode, careerYear, onRestart:()=>setPhase("setup"), onAdvance:advanceCareer}} />;
-  if (phase === "market") return <Market {...{squad, formation, usedIds, forcedSeason, careerYear, careerEvo, difficulty, onConfirm:finishMarket}} />;
+  if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,careerMode,setCareerMode,teamMode,setTeamMode,chosenTeam,setChosenTeam,startGame}} />;
+  if (phase === "bonus") return <BonusSelect {...{squad, formation, usedIds, teamClub: teamMode ? chosenTeam : null, onConfirm:({bonusTotal,coach,captain,superSub,finalSquad})=>{ setSquad(finalSquad); if(finalSquad!==squad){ const s=new Set(usedIds); finalSquad.forEach(p=>p&&s.add(p.pid)); setUsedIds(s);} setBonusTotal(bonusTotal); setCoach(coach); setCaptain(captain); setSuperSub(superSub); setPhase("season"); }}} />;
+  if (phase === "season") return <SeasonLive {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, onDone:()=>setPhase("result")}} />;
+  if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, careerMode, careerYear, onRestart:()=>setPhase("setup"), onAdvance:advanceCareer}} />;
+  if (phase === "market") return <Market {...{squad, formation, usedIds, forcedSeason, careerYear, careerEvo, difficulty, teamClub: teamMode ? chosenTeam : null, onConfirm:finishMarket}} />;
 
   return (
     <Draft {...{formation, squad, round, filledCount, spin, spinning, doSpin, reroll, rerolls,
