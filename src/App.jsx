@@ -723,13 +723,62 @@ function InfoModal({ onClose }) {
   );
 }
 
+// elenco di tutti i giochi del sito per il modale "Tutti i nostri giochi"
+const OTHER_GAMES = [
+  { emoji: "🏆", name: "Serie A 38-0", url: "https://universosportivo.com/38-0-serie-a/" },
+  { emoji: "🌍", name: "7-0 Mondiale", url: "https://universosportivo.com/7-0-mondiale/" },
+  { emoji: "🧠", name: "Quiz di calcio", url: "https://universosportivo.com/quiz-calcio/" },
+  { emoji: "🔤", name: "Wordle Italiano", url: "https://universosportivo.com/wordle-italiano/" },
+  { emoji: "⚽", name: "Wordle Calcio", url: "https://universosportivo.com/wordle-calcio/" },
+  { emoji: "🚴", name: "Quiz Ciclismo", url: "https://universosportivo.com/quiz-ciclismo/" },
+  { emoji: "🔢", name: "Nerdle IT", url: "https://universosportivo.com/nerdle-it/" },
+  { emoji: "🚩", name: "Indovina la Bandiera (Flagle)", url: "https://universosportivo.com/indovina-la-bandiera-flagle/" },
+  { emoji: "📐", name: "Indovina l'Angolo", url: "https://universosportivo.com/indovina-langolo-azzeccherai-la-misura-dellangolo-del-giorno/" },
+  { emoji: "🎾", name: "Quiz Tennis", url: "https://universosportivo.com/quiz-tennis-giochi-quotidiani-sul-tennis-in-italiano-in-test/", test: true },
+];
+
+function GamesModal({ onClose }) {
+  return (
+    <div onClick={onClose} style={{position:"fixed", inset:0, background:"rgba(0,0,0,.7)",
+      display:"flex", alignItems:"center", justifyContent:"center", zIndex:100, padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:S.fieldHi, border:`2px solid ${S.gold}`,
+        borderRadius:16, maxWidth:480, width:"100%", maxHeight:"85vh", overflowY:"auto", padding:"24px 22px"}}>
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6}}>
+          <h2 style={{color:S.gold, margin:0, fontSize:20}}>🎮 Tutti i nostri giochi</h2>
+          <button onClick={onClose} style={{background:"none", border:"none", color:S.cream, fontSize:24, cursor:"pointer", lineHeight:1}}>×</button>
+        </div>
+        <p style={{color:S.cream, opacity:.7, fontSize:13, margin:"0 0 16px"}}>
+          Giochi quotidiani in italiano su Universo Sportivo. Buon divertimento!
+        </p>
+        <div style={{display:"flex", flexDirection:"column", gap:10}}>
+          {OTHER_GAMES.map(g => (
+            <a key={g.url} href={g.url} target="_blank" rel="noopener noreferrer"
+               style={{display:"flex", alignItems:"center", gap:12, textDecoration:"none",
+                 background:"rgba(0,0,0,.25)", border:`1px solid ${hexA(S.gold,0.35)}`, borderRadius:12,
+                 padding:"13px 16px", color:S.cream, fontWeight:700, fontSize:15}}>
+              <span style={{fontSize:22}}>{g.emoji}</span>
+              <span style={{flex:1}}>{g.name}
+                {g.test && <span style={{marginLeft:8, fontSize:10, fontWeight:800, color:S.ink,
+                  background:S.gold, borderRadius:10, padding:"2px 7px", verticalAlign:"middle"}}>IN TEST</span>}
+              </span>
+              <span style={{color:S.gold, fontSize:18}}>›</span>
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draftMode, setDraftMode,
                  pickMode, setPickMode, seasonMode, setSeasonMode, chosenSeason, setChosenSeason,
                  careerMode, setCareerMode, teamMode, setTeamMode, chosenTeam, setChosenTeam, startGame }) {
   const [showInfo, setShowInfo] = useState(false);
+  const [showGames, setShowGames] = useState(false);
   return (
     <div style={wrap}>
       {showInfo && <InfoModal onClose={()=>setShowInfo(false)} />}
+      {showGames && <GamesModal onClose={()=>setShowGames(false)} />}
       <Header />
       <div style={{maxWidth:520, margin:"0 auto", padding:"0 20px"}}>
         <p style={{textAlign:"center", color:S.cream, opacity:.85, fontSize:15, lineHeight:1.5, marginBottom:18}}>
@@ -753,6 +802,14 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
                      background:"#3aa0ff", borderColor:"#3aa0ff", fontWeight:700}}>
             🌍 Gioca il Mondiale con l'Italia (e non)! Il nostro 7-0
           </a>
+        </div>
+
+        <div style={{textAlign:"center", marginBottom:22}}>
+          <button onClick={()=>setShowGames(true)}
+             style={{...chip(false), display:"inline-block", fontWeight:700,
+                     borderColor:hexA(S.gold,0.6), color:S.gold}}>
+            🎮 Clicca qui per tutti gli altri nostri giochi
+          </button>
         </div>
 
         <Label>Formazione</Label>
@@ -1259,6 +1316,7 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
   const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason, meta), [squad, sim, forcedSeason, meta]);
   const [showSeason, setShowSeason] = useState(false);
   const [showStandings, setShowStandings] = useState(false);
+  const [showGames, setShowGames] = useState(false);
 
   // ---- CARD IMMAGINE 1080x1350 su canvas, scaricabile (instagrammabile) ----
   const [genState, setGenState] = useState("idle"); // idle | done
@@ -1469,6 +1527,7 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
 
   return (
     <div style={wrap}>
+      {showGames && <GamesModal onClose={()=>setShowGames(false)} />}
       <Header small />
       <div style={{maxWidth:920, margin:"0 auto", padding:"0 16px"}}>
         <div style={{...panel, textAlign:"center", borderColor:season.tier.color}}>
@@ -1534,6 +1593,10 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
              style={{...bigBtnSm, background:"#2e7d32", color:"#fff", textDecoration:"none", display:"inline-flex", alignItems:"center"}}>
             🌍 Gioca il nostro 7-0 Mondiale
           </a>
+          <button onClick={()=>setShowGames(true)}
+             style={{...bigBtnSm, background:"transparent", border:`2px solid ${S.gold}`, color:S.gold}}>
+            🎮 Tutti gli altri nostri giochi
+          </button>
           {careerMode
             ? <button onClick={()=>onAdvance(season.expectedPos - season.realPos)} style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900}}>▶ PROSSIMA STAGIONE</button>
             : <button onClick={onRestart} style={{...bigBtnSm, background:"transparent", border:`2px solid ${S.gold}`, color:S.gold}}>↻ Rigioca</button>}
