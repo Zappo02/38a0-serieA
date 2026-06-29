@@ -309,6 +309,178 @@ function opponentsForSeason(season, excludeClub = null) {
     .slice(0, 19);
 }
 
+// ================== COPPA ITALIA: torneo a eliminazione diretta ==================
+// 16 squadre: la TUA + le 15 avversarie più forti della stagione. Seeding per forza
+// (stile Coppa Italia: le teste di serie si incontrano il più tardi possibile).
+// Ottavi e finale in gara secca; quarti e semifinali andata/ritorno (somma gol, poi rigori).
+
+// simula i gol attesi di una squadra data la sua forza (stesso mapping del campionato)
+function cupGoals(myT, oppT, home, rng) {
+  const teamAtt = 0.7 + myT * 2.8;
+  const homeAdv = home ? 1.10 : 0.93;
+  const lam = Math.max(0.12, teamAtt * homeAdv * (1.15 - oppT * 0.95));
+  return poisson(lam, rng);
+}
+
+// ordine "a serpentina" delle posizioni di seed in un bracket a 16, così seed 1 e 2
+// si incontrano solo in finale, 1-4 in semifinale, ecc.
+const BRACKET16 = [1,16,8,9,5,12,4,13,3,14,6,11,7,10,2,15];
+
+function simulateCup(season, myEntry, squad = null) {
+  const rng = mulberry32(((myEntry.seedHash || 12345) ^ 0xc0ffee) >>> 0);
+  // 15 avversarie più forti della stagione (escludo la squadra del giocatore se in team mode)
+  const rivals = opponentsForSeason(season, myEntry.excludeClub || null).slice(0, 15);
+  // entità: la mia + le rivali, con forza
+  const me = { club: myEntry.club || "LA TUA SQUADRA", str: myEntry.str, me: true };
+  let teams = [me, ...rivals.map(r => ({ club: r.club, str: r.str, me: false }))];
+  // se per qualche motivo non arriviamo a 16, completiamo con le successive
+  if (teams.length < 16) {
+    const extra = opponentsForSeason(season, myEntry.excludeClub || null).slice(15, 15 + (16 - teams.length));
+    teams = teams.concat(extra.map(r => ({ club: r.club, str: r.str, me: false })));
+  }
+  teams = teams.slice(0, 16);
+  // seeding per forza: 1 = più forte
+  teams.sort((a,b)=>b.str-a.str);
+  const seeded = teams.map((t,i)=>({ ...t, seed: i+1 }));
+  // posiziono nel bracket secondo BRACKET16
+  const bySeed = {}; seeded.forEach(t=>bySeed[t.seed]=t);
+  let bracket = BRACKET16.map(s => bySeed[s]);
+
+  const oppToT = (s) => Math.max(0, Math.min(1, (s - 72) / 13));
+  const myT = Math.max(0, Math.min(1, (me.str - 72) / 20)); // la mia forza usa scala "tua"
+  const tOf = (team) => team.me ? myT : oppToT(team.str);
+
+  // --- marcatori delle MIE partite: stessi pesi per ruolo del campionato ---
+  const filled = (squad || []).filter(Boolean);
+  const scorerWeight = (p) => {
+    if (["ST"].includes(p.slot)) return 10;
+    if (["RW","LW","CAM"].includes(p.slot)) return 6;
+    if (["CM","CDM"].includes(p.slot)) return 2.5;
+    if (["RB","LB"].includes(p.slot)) return 1;
+    if (p.slot === "CB") return 0.7;
+    return 0;
+  };
+  const scorerPool = filled.filter(p=>scorerWeight(p)>0);
+  const totW = scorerPool.reduce((s,p)=>s+scorerWeight(p),0) || 1;
+  const pickScorer = () => {
+    if (!scorerPool.length) return null;
+    let r = rng()*totW;
+    for (const p of scorerPool){ r -= scorerWeight(p); if (r<=0) return p.n; }
+    return scorerPool[0].n;
+  };
+  const minutes = (n) => {
+    const set = new Set();
+    let guard = 0;
+    while (set.size < n && guard < 300) { set.add(1 + Math.floor(rng()*90)); guard++; }
+    return [...set].sort((a,b)=>a-b);
+  };
+  // se la partita coinvolge me, aggiunge marcatori miei e minuti gol avversari per ogni gol segnato
+  const addNarration = (m) => {
+    const A = m.A, B = m.B;
+    const meIsA = A.me, meIsB = B.me;
+    if (!meIsA && !meIsB) return m;
+    if (m.legs) {
+      // due gare: legs = [[a1,b1],[a2,b2]] (gol di A e B in ciascuna)
+      m.narr = m.legs.map(([ga,gb], li) => {
+        const myGoals = meIsA ? ga : gb;
+        const oppGoals = meIsA ? gb : ga;
+        return {
+          home: meIsA ? (li===0) : (li===1), // io in casa: andata se sono A, ritorno se sono B
+          myGoals, oppGoals,
+          scorers: minutes(myGoals).map(min => ({ name: pickScorer(), min })),
+          oppMin: minutes(oppGoals),
+        };
+      });
+    } else {
+      const myGoals = meIsA ? m.ga : m.gb;
+      const oppGoals = meIsA ? m.gb : m.ga;
+      m.narr = [{
+        home: meIsA, myGoals, oppGoals,
+        scorers: minutes(myGoals).map(min => ({ name: pickScorer(), min })),
+        oppMin: minutes(oppGoals),
+      }];
+    }
+    return m;
+  };
+
+  // gara secca: ritorna {a, b, winner, scoreA, scoreB, pens?}
+  const playSingle = (A, B) => {
+    let ga = cupGoals(tOf(A), tOf(B), true, rng);
+    let gb = cupGoals(tOf(B), tOf(A), false, rng);
+    let pens = null;
+    if (ga === gb) {
+      // supplementari: un altro mini-tempo, poi rigori
+      ga += cupGoals(tOf(A), tOf(B), true, rng) > cupGoals(tOf(B), tOf(A), false, rng) ? 1 : 0;
+      if (ga === gb) {
+        // rigori: coin flip pesato sulla forza
+        const pa = tOf(A) + 0.5, pb = tOf(B) + 0.5;
+        const aWin = rng() < pa / (pa + pb);
+        pens = aWin ? [5,4] : [4,5];
+        return addNarration({ A, B, winner: aWin ? A : B, ga, gb, pens });
+      }
+    }
+    return addNarration({ A, B, winner: ga > gb ? A : B, ga, gb, pens });
+  };
+  // doppio confronto andata/ritorno: somma gol, parità -> rigori
+  const playTwoLeg = (A, B) => {
+    const a1 = cupGoals(tOf(A), tOf(B), true, rng), b1 = cupGoals(tOf(B), tOf(A), false, rng);  // andata in casa di A
+    const b2 = cupGoals(tOf(B), tOf(A), true, rng), a2 = cupGoals(tOf(A), tOf(B), false, rng);  // ritorno in casa di B
+    const aggA = a1 + a2, aggB = b1 + b2;
+    let pens = null, winner;
+    if (aggA === aggB) {
+      const pa = tOf(A) + 0.5, pb = tOf(B) + 0.5;
+      const aWin = rng() < pa / (pa + pb);
+      pens = aWin ? [5,4] : [4,5];
+      winner = aWin ? A : B;
+    } else winner = aggA > aggB ? A : B;
+    return addNarration({ A, B, winner, legs: [[a1,b1],[a2,b2]], aggA, aggB, pens });
+  };
+
+  // gioca un turno; format: "single" o "two"
+  const playRound = (teamsIn, format) => {
+    const matches = [];
+    for (let i=0;i<teamsIn.length;i+=2) {
+      const A = teamsIn[i], B = teamsIn[i+1];
+      const m = format === "two" ? playTwoLeg(A,B) : playSingle(A,B);
+      matches.push(m);
+    }
+    return matches;
+  };
+
+  // OTTAVI (secca) -> QUARTI (a/r) -> SEMI (a/r) -> FINALE (secca)
+  const r16 = playRound(bracket, "single");
+  const qfTeams = r16.map(m=>m.winner);
+  const qf = playRound(qfTeams, "two");
+  const sfTeams = qf.map(m=>m.winner);
+  const sf = playRound(sfTeams, "two");
+  const fTeams = sf.map(m=>m.winner);
+  const final = playRound(fTeams, "single")[0];
+
+  const champion = final.winner;
+  // capisco fin dove è arrivata la mia squadra
+  const reached = (() => {
+    if (champion.me) return "Vittoria";
+    if (final.A.me || final.B.me) return "Finale";
+    if (sf.some(m=>m.A.me||m.B.me)) return "Semifinale";
+    if (qf.some(m=>m.A.me||m.B.me)) return "Quarti";
+    return "Ottavi";
+  })();
+
+  // PERCORSO della mia squadra: le mie partite in ordine, per la simulazione live
+  const involvesMe = (m) => m.A.me || m.B.me;
+  const myPath = [];
+  const pushIfMine = (matches, roundName, twoLeg) => {
+    const m = matches.find(involvesMe);
+    if (m) myPath.push({ round: roundName, m, twoLeg, opp: m.A.me ? m.B : m.A });
+  };
+  pushIfMine(r16, "Ottavi", false);
+  pushIfMine(qf, "Quarti", true);
+  pushIfMine(sf, "Semifinale", true);
+  if (final.A.me || final.B.me) myPath.push({ round: "Finale", m: final, twoLeg: false, opp: final.A.me ? final.B : final.A });
+
+  return { season, seeded, rounds: { r16, qf, sf, final }, champion, reached, myPath };
+}
+
 // Calendario: ogni avversaria affrontata 2 volte (andata/ritorno), una casa una trasferta.
 function buildFixtures(rng, opponents) {
   const order = [...opponents];
@@ -772,7 +944,7 @@ function GamesModal({ onClose }) {
 
 function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draftMode, setDraftMode,
                  pickMode, setPickMode, seasonMode, setSeasonMode, chosenSeason, setChosenSeason,
-                 careerMode, setCareerMode, teamMode, setTeamMode, chosenTeam, setChosenTeam, startGame }) {
+                 careerMode, setCareerMode, teamMode, setTeamMode, chosenTeam, setChosenTeam, cupMode, setCupMode, startGame }) {
   const [showInfo, setShowInfo] = useState(false);
   const [showGames, setShowGames] = useState(false);
   return (
@@ -863,13 +1035,15 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
           </div>
         )}
 
-        <div style={{marginTop:10}}>
-          <button disabled aria-disabled="true" style={{
-            ...chip(false), width:"100%", cursor:"not-allowed", opacity:.55,
-            position:"relative", borderStyle:"dashed",
-          }}>
-            🏆 Coppa Italia
-            <span style={{display:"block", fontSize:10, opacity:.85, fontWeight:400, color:S.gold}}>in uscita il 28 giugno</span>
+        <Label>Coppa Italia <span style={{color:S.gold, fontSize:10}}>NUOVO</span></Label>
+        <div style={chipRow}>
+          <button onClick={()=>setCupMode(false)} style={chip(!cupMode)}>
+            Solo campionato
+            <span style={{display:"block", fontSize:10, opacity:.7, fontWeight:400}}>la stagione classica</span>
+          </button>
+          <button onClick={()=>setCupMode(true)} style={chip(cupMode)}>
+            🏆 Anche la Coppa
+            <span style={{display:"block", fontSize:10, opacity:.7, fontWeight:400}}>dopo il campionato, torneo a eliminazione</span>
           </button>
         </div>
 
@@ -1310,7 +1484,7 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, excludeClub = null, careerMode = false, careerYear = 1, onRestart, onAdvance }) {
+function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, excludeClub = null, careerMode = false, careerYear = 1, cupMode = false, onGoCup, onRestart, onAdvance }) {
   const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
   const meta = useMemo(()=>({ coach, captain, superSub, excludeClub }), [coach, captain, superSub, excludeClub]);
   const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason, meta), [squad, sim, forcedSeason, meta]);
@@ -1576,6 +1750,12 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
         {showStandings && <StandingsTable season={season} />}
 
         <div style={{display:"flex", gap:10, justifyContent:"center", marginTop:16, flexWrap:"wrap"}}>
+          {cupMode && (
+            <button onClick={()=>onGoCup({ strength: sim.strength, playedSeason: season.season })}
+              style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
+              🏆 VAI ALLA COPPA ITALIA
+            </button>
+          )}
           <button onClick={()=>{setShowSeason(s=>!s); setShowStandings(false);}} style={bigBtnSm}>
             {showSeason ? "👥 Vedi la rosa" : "📅 Calendario"}
           </button>
@@ -2102,6 +2282,194 @@ function Market({ squad, formation, usedIds, forcedSeason, careerYear, careerEvo
   );
 }
 
+// ================== COPPA ITALIA: simulazione live del MIO cammino ==================
+function CupLive({ cup, onDone }) {
+  const path = cup?.myPath || [];
+  const [shown, setShown] = useState(0);   // quante mie partite rivelate
+  const listRef = useRef(null);
+
+  useEffect(() => {
+    if (shown >= path.length) return;
+    const t = setTimeout(()=>setShown(s=>s+1), shown===0 ? 500 : 1500);
+    return () => clearTimeout(t);
+  }, [shown, path.length]);
+
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [shown]);
+
+  const done = shown >= path.length;
+  const meName = cup?.champion?.me ? cup.champion.club : (path[0] ? (path[0].m.A.me ? path[0].m.A.club : path[0].m.B.club) : "LA TUA SQUADRA");
+
+  // esito del mio cammino mostrato finora
+  const lastShown = path.slice(0, shown);
+  const eliminated = lastShown.length && lastShown[lastShown.length-1].m.winner.me === false && shown >= path.length && cup.reached !== "Vittoria";
+
+  const matchRow = (step, i) => {
+    const { round, m, twoLeg, opp } = step;
+    const iWon = m.winner.me;
+    const meIsA = m.A.me;
+    const myAgg = twoLeg ? (meIsA ? m.aggA : m.aggB) : (meIsA ? m.ga : m.gb);
+    const oppAgg = twoLeg ? (meIsA ? m.aggB : m.aggA) : (meIsA ? m.gb : m.ga);
+    return (
+      <div key={i} style={{background:"rgba(0,0,0,.25)", border:`2px solid ${iWon?hexA("#6ee7a8",0.5):hexA("#ff8e8e",0.5)}`,
+        borderRadius:12, padding:"14px 16px", animation:"us-pop .35s ease"}}>
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8}}>
+          <span style={{color:S.gold, fontWeight:900, fontSize:13, letterSpacing:1, textTransform:"uppercase"}}>{round}</span>
+          <span style={{fontSize:11, color:S.cream, opacity:.5}}>{twoLeg ? "andata/ritorno" : "gara secca"}</span>
+        </div>
+        <div style={{display:"flex", alignItems:"center", justifyContent:"center", gap:14, margin:"6px 0"}}>
+          <span style={{color:S.gold, fontWeight:800, fontSize:16, flex:1, textAlign:"right"}}>★ {meName}</span>
+          <span style={{color:S.cream, fontWeight:900, fontSize:26, minWidth:64, textAlign:"center"}}>
+            {myAgg}<span style={{opacity:.4}}>-</span>{oppAgg}
+          </span>
+          <span style={{color:S.cream, fontWeight:700, fontSize:16, flex:1, textAlign:"left"}}>{opp.club}</span>
+        </div>
+        {m.pens && <div style={{textAlign:"center", fontSize:12, color:S.gold, marginBottom:6}}>
+          ai rigori {meIsA ? m.pens[0] : m.pens[1]}-{meIsA ? m.pens[1] : m.pens[0]}</div>}
+        {/* marcatori miei per ogni gara */}
+        {m.narr && m.narr.some(l=>l.scorers.length) && (
+          <div style={{borderTop:`1px solid ${hexA(S.cream,0.1)}`, paddingTop:8, marginTop:4}}>
+            {m.narr.map((leg, li) => leg.scorers.length>0 && (
+              <div key={li} style={{fontSize:12, color:S.cream, opacity:.85, marginBottom:2}}>
+                {m.narr.length>1 && <span style={{opacity:.5}}>{li===0?"Andata":"Ritorno"}: </span>}
+                ⚽ {leg.scorers.map(s=>`${s.name} ${s.min}'`).join(" · ")}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{textAlign:"center", marginTop:8, fontWeight:900, fontSize:13,
+          color: iWon ? "#6ee7a8" : "#ff8e8e"}}>
+          {iWon ? "✓ PASSI IL TURNO" : "✗ ELIMINATO"}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={wrap}>
+      <Header small />
+      <div style={{maxWidth:560, margin:"0 auto", padding:"0 16px"}}>
+        <div style={{...panel, marginBottom:14, textAlign:"center"}}>
+          <div style={{fontSize:34}}>🏆</div>
+          <div style={{color:S.gold, fontWeight:900, fontSize:18, letterSpacing:1}}>COPPA ITALIA {cup.season}</div>
+          <div style={{color:S.cream, opacity:.6, fontSize:12, marginTop:2}}>Il tuo cammino verso il trofeo</div>
+        </div>
+
+        <div ref={listRef} style={{maxHeight:"60vh", overflowY:"auto", display:"flex", flexDirection:"column", gap:12, paddingRight:4}}>
+          {path.slice(0, shown).map((step,i)=>matchRow(step,i))}
+          {!done && shown>0 && (
+            <div style={{textAlign:"center", color:S.cream, opacity:.5, fontSize:13, padding:8}}>⏳ prossima sfida...</div>
+          )}
+        </div>
+
+        <div style={{display:"flex", gap:10, justifyContent:"center", marginTop:18, flexWrap:"wrap"}}>
+          {!done
+            ? <button onClick={()=>setShown(path.length)} style={{...bigBtnSm, background:"transparent", border:`2px solid ${S.gold}`, color:S.gold}}>
+                ⏭ Salta al tabellone
+              </button>
+            : <button onClick={onDone} style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900}}>
+                {cup.reached==="Vittoria" ? "🏆 VEDI IL TABELLONE" : "📋 VEDI IL TABELLONE COMPLETO"}
+              </button>}
+        </div>
+      </div>
+      <style>{`@keyframes us-pop{from{transform:scale(.95);opacity:0}to{transform:scale(1);opacity:1}}`}</style>
+    </div>
+  );
+}
+
+// ================== COPPA ITALIA: tabellone visivo (bracket) ==================
+function CupBracket({ cup, onBack, onRestart }) {
+  if (!cup) return null;
+  const { season, rounds, champion, reached } = cup;
+  const meWon = champion.me;
+
+  // riquadro di una singola sfida
+  const MatchCard = ({ m, twoLeg }) => {
+    if (!m) return null;
+    const A = m.A, B = m.B;
+    const scoreA = twoLeg ? m.aggA : m.ga;
+    const scoreB = twoLeg ? m.aggB : m.gb;
+    const row = (team, score, isWinner) => (
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between",
+        padding:"5px 9px", borderRadius:6,
+        background: team.me ? hexA(S.gold,0.16) : "transparent",
+        opacity: isWinner ? 1 : 0.5, fontWeight: isWinner ? 800 : 500}}>
+        <span style={{fontSize:12, color: team.me ? S.gold : S.cream, whiteSpace:"nowrap", overflow:"hidden",
+          textOverflow:"ellipsis", maxWidth:118}}>
+          {team.me ? "★ " : ""}{team.club}
+        </span>
+        <span style={{fontSize:12, color:S.cream, fontWeight:800, marginLeft:6}}>{score}</span>
+      </div>
+    );
+    const aWin = m.winner === A;
+    return (
+      <div style={{background:"rgba(0,0,0,.25)", border:`1px solid ${hexA(S.cream,0.12)}`,
+        borderRadius:8, padding:3, marginBottom:8, minWidth:150}}>
+        {row(A, scoreA, aWin)}
+        {row(B, scoreB, !aWin)}
+        {m.pens && <div style={{textAlign:"center", fontSize:10, color:S.gold, opacity:.8, marginTop:2}}>
+          rigori {m.pens[0]}-{m.pens[1]}</div>}
+      </div>
+    );
+  };
+
+  const Column = ({ title, matches, twoLeg, single }) => (
+    <div style={{minWidth:166}}>
+      <div style={{color:S.gold, fontSize:12, fontWeight:900, letterSpacing:1, textAlign:"center",
+        marginBottom:8, textTransform:"uppercase"}}>{title}
+        {twoLeg && <span style={{display:"block", fontSize:9, opacity:.6, fontWeight:600, letterSpacing:0}}>andata/ritorno</span>}
+        {single && <span style={{display:"block", fontSize:9, opacity:.6, fontWeight:600, letterSpacing:0}}>gara secca</span>}
+      </div>
+      {matches.map((m,i)=><MatchCard key={i} m={m} twoLeg={twoLeg} />)}
+    </div>
+  );
+
+  return (
+    <div style={wrap}>
+      <Header small />
+      <div style={{maxWidth:980, margin:"0 auto", padding:"0 16px"}}>
+        <div style={{...panel, textAlign:"center", borderColor:S.gold, marginBottom:16}}>
+          <div style={{fontSize:44}}>🏆</div>
+          <div style={{color:S.gold, fontSize:26, fontWeight:900, letterSpacing:1}}>COPPA ITALIA {season}</div>
+          {meWon
+            ? <div style={{color:S.gold, fontSize:18, fontWeight:800, marginTop:6}}>🎉 L'HAI VINTA! Sei campione d'Italia!</div>
+            : <div style={{color:S.cream, opacity:.85, fontSize:16, marginTop:6}}>
+                La tua squadra è uscita: <b style={{color:S.gold}}>{reached}</b>.
+                Trofeo a <b>{champion.club}</b>.
+              </div>}
+        </div>
+
+        <div style={{display:"flex", gap:14, overflowX:"auto", paddingBottom:12, justifyContent:"flex-start"}}>
+          <Column title="Ottavi" matches={rounds.r16} single />
+          <Column title="Quarti" matches={rounds.qf} twoLeg />
+          <Column title="Semifinali" matches={rounds.sf} twoLeg />
+          <Column title="Finale" matches={[rounds.final]} single />
+          <div style={{minWidth:150, display:"flex", flexDirection:"column", justifyContent:"center"}}>
+            <div style={{color:S.gold, fontSize:12, fontWeight:900, letterSpacing:1, textAlign:"center", marginBottom:8}}>VINCITRICE</div>
+            <div style={{background:hexA(S.gold,0.16), border:`2px solid ${S.gold}`, borderRadius:10,
+              padding:"14px 10px", textAlign:"center"}}>
+              <div style={{fontSize:28}}>🏆</div>
+              <div style={{color: champion.me ? S.gold : S.cream, fontWeight:900, fontSize:14, marginTop:4}}>
+                {champion.me ? "★ "+champion.club : champion.club}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{display:"flex", gap:10, justifyContent:"center", marginTop:20, flexWrap:"wrap"}}>
+          <button onClick={onBack} style={{...bigBtnSm, background:"transparent", border:`2px solid ${S.gold}`, color:S.gold}}>
+            ↩ Torna al campionato
+          </button>
+          <button onClick={onRestart} style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900}}>
+            ↻ Nuova partita
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [phase, setPhase] = useState("setup"); // setup | draft | bonus | season | result | market
   const [formationKey, setFormationKey] = useState("4-3-3");
@@ -2113,6 +2481,9 @@ export default function App() {
   // ---- Modalità Squadra: pesca solo dalle rose di un club, che prende il tuo posto in campionato ----
   const [teamMode, setTeamMode] = useState(false);
   const [chosenTeam, setChosenTeam] = useState("Roma");
+  // ---- Coppa Italia: dopo il campionato parte un torneo a eliminazione (opt-in) ----
+  const [cupMode, setCupMode] = useState(false);
+  const [cupResult, setCupResult] = useState(null);
 
   const formation = FORMATIONS[formationKey];
   const [squad, setSquad] = useState([]);        // array allineato a slots
@@ -2320,12 +2691,27 @@ export default function App() {
     setPhase("bonus"); // nuova stagione: si ripassa dai bonus pre-partita
   }, []);
 
+  // ---- COPPA ITALIA: calcola il torneo e mostra il bracket ----
+  const goToCup = useCallback((seasonInfo) => {
+    // seasonInfo: { strength, playedSeason } passati dal Result
+    const cup = simulateCup(seasonInfo.playedSeason, {
+      str: seasonInfo.strength,
+      club: teamMode ? chosenTeam : "LA TUA SQUADRA",
+      excludeClub: teamMode ? chosenTeam : null,
+      seedHash: Math.floor(seasonInfo.strength * 1000) ^ (seasonInfo.playedSeason.charCodeAt(0) * 31),
+    }, squad);
+    setCupResult(cup);
+    setPhase("cuplive");
+  }, [teamMode, chosenTeam, squad]);
+
   // ============ RENDER ============
-  if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,careerMode,setCareerMode,teamMode,setTeamMode,chosenTeam,setChosenTeam,startGame}} />;
+  if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,careerMode,setCareerMode,teamMode,setTeamMode,chosenTeam,setChosenTeam,cupMode,setCupMode,startGame}} />;
   if (phase === "bonus") return <BonusSelect {...{squad, formation, usedIds, teamClub: teamMode ? chosenTeam : null, onConfirm:({bonusTotal,coach,captain,superSub,finalSquad})=>{ setSquad(finalSquad); if(finalSquad!==squad){ const s=new Set(usedIds); finalSquad.forEach(p=>p&&s.add(p.pid)); setUsedIds(s);} setBonusTotal(bonusTotal); setCoach(coach); setCaptain(captain); setSuperSub(superSub); setPhase("season"); }}} />;
   if (phase === "season") return <SeasonLive {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, onDone:()=>setPhase("result")}} />;
-  if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, careerMode, careerYear, onRestart:()=>setPhase("setup"), onAdvance:advanceCareer}} />;
+  if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, careerMode, careerYear, cupMode, onGoCup:goToCup, onRestart:()=>setPhase("setup"), onAdvance:advanceCareer}} />;
   if (phase === "market") return <Market {...{squad, formation, usedIds, forcedSeason, careerYear, careerEvo, difficulty, teamClub: teamMode ? chosenTeam : null, onConfirm:finishMarket}} />;
+  if (phase === "cuplive") return <CupLive {...{cup:cupResult, onDone:()=>setPhase("cup")}} />;
+  if (phase === "cup") return <CupBracket {...{cup:cupResult, onBack:()=>setPhase("result"), onRestart:()=>setPhase("setup")}} />;
 
   return (
     <Draft {...{formation, squad, round, filledCount, spin, spinning, doSpin, reroll, rerolls,
