@@ -478,7 +478,55 @@ function simulateCup(season, myEntry, squad = null) {
   pushIfMine(sf, "Semifinale", true);
   if (final.A.me || final.B.me) myPath.push({ round: "Finale", m: final, twoLeg: false, opp: final.A.me ? final.B : final.A });
 
-  return { season, seeded, rounds: { r16, qf, sf, final }, champion, reached, myPath };
+  // LISTA PIATTA di partite singole per la simulazione live (andata e ritorno SEPARATE).
+  // Ogni voce: round, leg ("Andata"/"Ritorno"/null), avversario, casa, eventi gol ordinati
+  // per minuto (mine: true/false, name), risultato finale e aggregato dopo questa gara.
+  const oppRoster = (club) => {
+    const r = PLAYERS.filter(p => p.c===club && p.s===season);
+    return r.length ? r : null;
+  };
+  const oppScorerName = (club) => {
+    const r = oppRoster(club);
+    if (!r) return club;
+    // pesa verso attaccanti/centrocampisti offensivi
+    const w = (p)=> ["ST"].includes(p.r)?10 : ["RW","LW","CAM","RM","LM"].includes(p.r)?6 : ["CM","CDM"].includes(p.r)?2.5 : ["RB","LB"].includes(p.r)?1 : p.r==="CB"?0.7 : 0;
+    const pool = r.filter(p=>w(p)>0); if(!pool.length) return r[0].n;
+    const tot = pool.reduce((s,p)=>s+w(p),0);
+    let x = rng()*tot; for(const p of pool){ x-=w(p); if(x<=0) return p.n; }
+    return pool[0].n;
+  };
+  const myMatches = [];
+  for (const step of myPath) {
+    const { round, m, twoLeg, opp } = step;
+    const meIsA = m.A.me;
+    const legCount = m.narr ? m.narr.length : 1;
+    let aggMine = 0, aggOpp = 0;
+    for (let li=0; li<legCount; li++) {
+      const leg = m.narr ? m.narr[li] : null;
+      const myGoals = leg ? leg.myGoals : (meIsA ? m.ga : m.gb);
+      const oppGoals = leg ? leg.oppGoals : (meIsA ? m.gb : m.ga);
+      aggMine += myGoals; aggOpp += oppGoals;
+      // eventi: miei (con nome) + avversari (con nome avversario), fusi e ordinati per minuto
+      const myEvents = (leg ? leg.scorers : []).map(s => ({ min: s.min, mine: true, name: s.name }));
+      const oppEvents = (leg ? leg.oppMin : []).map(min => ({ min, mine: false, name: oppScorerName(opp.club) }));
+      const events = [...myEvents, ...oppEvents].sort((a,b)=>a.min-b.min);
+      const isLast = (li === legCount-1);
+      myMatches.push({
+        round,
+        leg: twoLeg ? (li===0 ? "Andata" : "Ritorno") : null,
+        oppClub: opp.club,
+        home: leg ? leg.home : meIsA,
+        myGoals, oppGoals, events,
+        // aggregato dopo questa gara (per i doppi confronti)
+        twoLeg, aggMine, aggOpp,
+        isLastOfTie: isLast,
+        pens: (isLast && m.pens) ? (meIsA ? m.pens : [m.pens[1], m.pens[0]]) : null,
+        advanced: isLast ? m.winner.me : null, // passo il turno? (solo all'ultima gara del confronto)
+      });
+    }
+  }
+
+  return { season, seeded, rounds: { r16, qf, sf, final }, champion, reached, myPath, myMatches };
 }
 
 // Calendario: ogni avversaria affrontata 2 volte (andata/ritorno), una casa una trasferta.
@@ -2283,89 +2331,139 @@ function Market({ squad, formation, usedIds, forcedSeason, careerYear, careerEvo
 }
 
 // ================== COPPA ITALIA: simulazione live del MIO cammino ==================
+// Orologio che scorre (0'→90'), gol miei e avversari che compaiono al loro minuto,
+// punteggio aggiornato in tempo reale. Andata e ritorno sono partite SEPARATE.
 function CupLive({ cup, onDone }) {
-  const path = cup?.myPath || [];
-  const [shown, setShown] = useState(0);   // quante mie partite rivelate
+  const matches = cup?.myMatches || [];
+  const meName = cup?.myPath?.[0] ? (cup.myPath[0].m.A.me ? cup.myPath[0].m.A.club : cup.myPath[0].m.B.club) : "LA TUA SQUADRA";
+
+  const MATCH_MS = 7000;       // durata orologio di una partita (~7s)
+  const STEP_MIN = 2;          // minuti per tick
+  const TICK_MS = Math.round(MATCH_MS / (90 / STEP_MIN)); // ms per tick (~155ms)
+  const [idx, setIdx] = useState(0);     // partita corrente
+  const [clock, setClock] = useState(0); // minuto corrente
+  const [phase, setPhase] = useState("playing"); // playing | pause | done
+  const [skipped, setSkipped] = useState(false);
   const listRef = useRef(null);
 
+  const cur = matches[idx];
+
+  // avanzamento orologio
   useEffect(() => {
-    if (shown >= path.length) return;
-    const t = setTimeout(()=>setShown(s=>s+1), shown===0 ? 500 : 1500);
+    if (skipped || phase !== "playing" || !cur) return;
+    if (clock >= 92) {
+      // fine partita: pausa breve, poi prossima
+      const t = setTimeout(() => {
+        if (idx + 1 < matches.length) { setIdx(i=>i+1); setClock(0); }
+        else setPhase("done");
+      }, 1400);
+      return () => clearTimeout(t);
+    }
+    const t = setTimeout(() => setClock(c => c + STEP_MIN), TICK_MS);
     return () => clearTimeout(t);
-  }, [shown, path.length]);
+  }, [clock, idx, phase, cur, matches.length, skipped]);
 
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [shown]);
+  }, [idx, clock]);
 
-  const done = shown >= path.length;
-  const meName = cup?.champion?.me ? cup.champion.club : (path[0] ? (path[0].m.A.me ? path[0].m.A.club : path[0].m.B.club) : "LA TUA SQUADRA");
+  const skipAll = () => { setSkipped(true); setPhase("done"); };
 
-  // esito del mio cammino mostrato finora
-  const lastShown = path.slice(0, shown);
-  const eliminated = lastShown.length && lastShown[lastShown.length-1].m.winner.me === false && shown >= path.length && cup.reached !== "Vittoria";
+  // punteggio di una partita a un dato minuto
+  const scoreAt = (m, minute) => {
+    let mine=0, opp=0;
+    for (const e of m.events) if (e.min <= minute) { e.mine ? mine++ : opp++; }
+    return { mine, opp };
+  };
 
-  const matchRow = (step, i) => {
-    const { round, m, twoLeg, opp } = step;
-    const iWon = m.winner.me;
-    const meIsA = m.A.me;
-    const myAgg = twoLeg ? (meIsA ? m.aggA : m.aggB) : (meIsA ? m.ga : m.gb);
-    const oppAgg = twoLeg ? (meIsA ? m.aggB : m.aggA) : (meIsA ? m.gb : m.ga);
+  // card di una partita conclusa (compatta)
+  const finishedCard = (m, i) => {
+    const adv = m.advanced;
+    const showResult = m.isLastOfTie;
     return (
-      <div key={i} style={{background:"rgba(0,0,0,.25)", border:`2px solid ${iWon?hexA("#6ee7a8",0.5):hexA("#ff8e8e",0.5)}`,
-        borderRadius:12, padding:"14px 16px", animation:"us-pop .35s ease"}}>
-        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8}}>
-          <span style={{color:S.gold, fontWeight:900, fontSize:13, letterSpacing:1, textTransform:"uppercase"}}>{round}</span>
-          <span style={{fontSize:11, color:S.cream, opacity:.5}}>{twoLeg ? "andata/ritorno" : "gara secca"}</span>
-        </div>
-        <div style={{display:"flex", alignItems:"center", justifyContent:"center", gap:14, margin:"6px 0"}}>
-          <span style={{color:S.gold, fontWeight:800, fontSize:16, flex:1, textAlign:"right"}}>★ {meName}</span>
-          <span style={{color:S.cream, fontWeight:900, fontSize:26, minWidth:64, textAlign:"center"}}>
-            {myAgg}<span style={{opacity:.4}}>-</span>{oppAgg}
+      <div key={i} style={{background:"rgba(0,0,0,.22)", border:`1px solid ${hexA(S.cream,0.12)}`,
+        borderRadius:10, padding:"10px 14px"}}>
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+          <span style={{color:S.gold, fontSize:11, fontWeight:800, letterSpacing:1, textTransform:"uppercase"}}>
+            {m.round}{m.leg ? ` · ${m.leg}` : ""}
           </span>
-          <span style={{color:S.cream, fontWeight:700, fontSize:16, flex:1, textAlign:"left"}}>{opp.club}</span>
+          <span style={{fontSize:10, color:S.cream, opacity:.4}}>{m.home ? "casa" : "trasferta"}</span>
         </div>
-        {m.pens && <div style={{textAlign:"center", fontSize:12, color:S.gold, marginBottom:6}}>
-          ai rigori {meIsA ? m.pens[0] : m.pens[1]}-{meIsA ? m.pens[1] : m.pens[0]}</div>}
-        {/* marcatori miei per ogni gara */}
-        {m.narr && m.narr.some(l=>l.scorers.length) && (
-          <div style={{borderTop:`1px solid ${hexA(S.cream,0.1)}`, paddingTop:8, marginTop:4}}>
-            {m.narr.map((leg, li) => leg.scorers.length>0 && (
-              <div key={li} style={{fontSize:12, color:S.cream, opacity:.85, marginBottom:2}}>
-                {m.narr.length>1 && <span style={{opacity:.5}}>{li===0?"Andata":"Ritorno"}: </span>}
-                ⚽ {leg.scorers.map(s=>`${s.name} ${s.min}'`).join(" · ")}
-              </div>
-            ))}
-          </div>
-        )}
-        <div style={{textAlign:"center", marginTop:8, fontWeight:900, fontSize:13,
-          color: iWon ? "#6ee7a8" : "#ff8e8e"}}>
-          {iWon ? "✓ PASSI IL TURNO" : "✗ ELIMINATO"}
+        <div style={{display:"flex", alignItems:"center", gap:10, marginTop:4}}>
+          <span style={{color:S.gold, fontWeight:700, fontSize:14, flex:1, textAlign:"right"}}>★ {meName}</span>
+          <span style={{color:S.cream, fontWeight:900, fontSize:18, minWidth:50, textAlign:"center"}}>{m.myGoals}-{m.oppGoals}</span>
+          <span style={{color:S.cream, fontWeight:600, fontSize:14, flex:1}}>{m.oppClub}</span>
         </div>
+        {m.twoLeg && showResult && <div style={{textAlign:"center", fontSize:11, color:S.cream, opacity:.6, marginTop:2}}>
+          aggregato {m.aggMine}-{m.aggOpp}{m.pens ? ` · rigori ${m.pens[0]}-${m.pens[1]}` : ""}</div>}
+        {showResult && <div style={{textAlign:"center", marginTop:4, fontWeight:900, fontSize:11,
+          color: adv ? "#6ee7a8" : "#ff8e8e"}}>{adv ? "✓ PASSI IL TURNO" : "✗ ELIMINATO"}</div>}
       </div>
     );
   };
+
+  const minuteShown = Math.min(90, clock);
+  const live = cur ? scoreAt(cur, minuteShown) : null;
+  const liveEvents = cur ? cur.events.filter(e=>e.min<=minuteShown) : [];
 
   return (
     <div style={wrap}>
       <Header small />
       <div style={{maxWidth:560, margin:"0 auto", padding:"0 16px"}}>
         <div style={{...panel, marginBottom:14, textAlign:"center"}}>
-          <div style={{fontSize:34}}>🏆</div>
-          <div style={{color:S.gold, fontWeight:900, fontSize:18, letterSpacing:1}}>COPPA ITALIA {cup.season}</div>
+          <div style={{fontSize:30}}>🏆</div>
+          <div style={{color:S.gold, fontWeight:900, fontSize:17, letterSpacing:1}}>COPPA ITALIA {cup.season}</div>
           <div style={{color:S.cream, opacity:.6, fontSize:12, marginTop:2}}>Il tuo cammino verso il trofeo</div>
         </div>
 
-        <div ref={listRef} style={{maxHeight:"60vh", overflowY:"auto", display:"flex", flexDirection:"column", gap:12, paddingRight:4}}>
-          {path.slice(0, shown).map((step,i)=>matchRow(step,i))}
-          {!done && shown>0 && (
-            <div style={{textAlign:"center", color:S.cream, opacity:.5, fontSize:13, padding:8}}>⏳ prossima sfida...</div>
-          )}
+        {/* partite già concluse (compatte) */}
+        <div ref={listRef} style={{maxHeight:"30vh", overflowY:"auto", display:"flex", flexDirection:"column", gap:8, marginBottom:14}}>
+          {matches.slice(0, skipped ? matches.length : idx).map((m,i)=>finishedCard(m,i))}
         </div>
 
+        {/* PARTITA IN CORSO con orologio */}
+        {phase !== "done" && cur && (
+          <div style={{...panel, borderColor:S.gold, padding:"18px 18px"}}>
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10}}>
+              <span style={{color:S.gold, fontSize:12, fontWeight:900, letterSpacing:1, textTransform:"uppercase"}}>
+                {cur.round}{cur.leg ? ` · ${cur.leg}` : ""}
+              </span>
+              <span style={{color:S.cream, fontSize:11, opacity:.5}}>{cur.home ? "in casa" : "in trasferta"} · {cur.twoLeg ? "andata/ritorno" : "gara secca"}</span>
+            </div>
+            {/* orologio */}
+            <div style={{textAlign:"center", marginBottom:8}}>
+              <span style={{display:"inline-block", background:"rgba(0,0,0,.35)", color:S.gold, fontWeight:900,
+                fontSize:15, padding:"3px 14px", borderRadius:20, letterSpacing:1}}>
+                ⏱ {minuteShown}'
+              </span>
+            </div>
+            {/* punteggio live */}
+            <div style={{display:"flex", alignItems:"center", justifyContent:"center", gap:14, margin:"4px 0 10px"}}>
+              <span style={{color:S.gold, fontWeight:800, fontSize:17, flex:1, textAlign:"right"}}>★ {meName}</span>
+              <span style={{color:S.cream, fontWeight:900, fontSize:34, minWidth:74, textAlign:"center"}}>
+                {live.mine}<span style={{opacity:.4}}>-</span>{live.opp}
+              </span>
+              <span style={{color:S.cream, fontWeight:700, fontSize:17, flex:1, textAlign:"left"}}>{cur.oppClub}</span>
+            </div>
+            {/* barra del tempo */}
+            <div style={{height:6, background:"rgba(255,255,255,.1)", borderRadius:3, overflow:"hidden", marginBottom:10}}>
+              <div style={{height:"100%", width:`${minuteShown/90*100}%`, background:S.gold, transition:"width .1s linear"}}/>
+            </div>
+            {/* eventi gol man mano */}
+            <div style={{display:"flex", flexDirection:"column", gap:4, minHeight:24}}>
+              {liveEvents.map((e,i)=>(
+                <div key={i} style={{fontSize:13, color: e.mine ? S.cream : hexA(S.cream,0.7),
+                  fontWeight: e.mine?700:500, animation:"us-pop .3s ease"}}>
+                  ⚽ <b>{e.min}'</b> {e.name} <span style={{opacity:.5, fontSize:11}}>({e.mine ? meName : cur.oppClub})</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div style={{display:"flex", gap:10, justifyContent:"center", marginTop:18, flexWrap:"wrap"}}>
-          {!done
-            ? <button onClick={()=>setShown(path.length)} style={{...bigBtnSm, background:"transparent", border:`2px solid ${S.gold}`, color:S.gold}}>
+          {phase !== "done"
+            ? <button onClick={skipAll} style={{...bigBtnSm, background:"transparent", border:`2px solid ${S.gold}`, color:S.gold}}>
                 ⏭ Salta al tabellone
               </button>
             : <button onClick={onDone} style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900}}>
@@ -2373,7 +2471,7 @@ function CupLive({ cup, onDone }) {
               </button>}
         </div>
       </div>
-      <style>{`@keyframes us-pop{from{transform:scale(.95);opacity:0}to{transform:scale(1);opacity:1}}`}</style>
+      <style>{`@keyframes us-pop{from{transform:scale(.94);opacity:0}to{transform:scale(1);opacity:1}}`}</style>
     </div>
   );
 }
