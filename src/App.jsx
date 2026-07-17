@@ -1083,15 +1083,24 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
           </div>
         )}
 
-        <Label>Coppa Italia <span style={{color:S.gold, fontSize:10}}>NUOVO</span></Label>
+        <Label>Coppe <span style={{color:S.gold, fontSize:10}}>NUOVO</span></Label>
         <div style={chipRow}>
           <button onClick={()=>setCupMode(false)} style={chip(!cupMode)}>
             Solo campionato
             <span style={{display:"block", fontSize:10, opacity:.7, fontWeight:400}}>la stagione classica</span>
           </button>
           <button onClick={()=>setCupMode(true)} style={chip(cupMode)}>
-            🏆 Anche la Coppa
+            🏆 Anche la Coppa Italia
             <span style={{display:"block", fontSize:10, opacity:.7, fontWeight:400}}>dopo il campionato, torneo a eliminazione</span>
+          </button>
+        </div>
+        <div style={{marginTop:8}}>
+          <button disabled aria-disabled="true" style={{
+            ...chip(false), width:"100%", cursor:"not-allowed", opacity:.55,
+            borderStyle:"dashed",
+          }}>
+            ⭐ Anche la Champions League
+            <span style={{display:"block", fontSize:10, opacity:.85, fontWeight:400, color:S.gold}}>in uscita entro il 20 luglio</span>
           </button>
         </div>
 
