@@ -411,37 +411,36 @@ function runCupBracket({ season, teams16, squad = null, seedHash = 12345, oppRos
     return m;
   };
 
-  // gara secca: ritorna {a, b, winner, scoreA, scoreB, pens?}
+  // decide il vincitore in caso di equilibrio, pesato sulla forza
+  const pickWinner = (A, B) => {
+    const pa = tOf(A) + 0.5, pb = tOf(B) + 0.5;
+    return rng() < pa / (pa + pb) ? A : B;
+  };
+  // gara secca: MAI pareggio. Se i 90' finirebbero pari, un gol decisivo va al vincitore
+  // (deciso per forza) — così il tabellino è sempre netto: o vinci o perdi.
   const playSingle = (A, B) => {
     let ga = cupGoals(tOf(A), tOf(B), true, rng);
     let gb = cupGoals(tOf(B), tOf(A), false, rng);
-    let pens = null;
     if (ga === gb) {
-      // supplementari: un altro mini-tempo, poi rigori
-      ga += cupGoals(tOf(A), tOf(B), true, rng) > cupGoals(tOf(B), tOf(A), false, rng) ? 1 : 0;
-      if (ga === gb) {
-        // rigori: coin flip pesato sulla forza
-        const pa = tOf(A) + 0.5, pb = tOf(B) + 0.5;
-        const aWin = rng() < pa / (pa + pb);
-        pens = aWin ? [5,4] : [4,5];
-        return addNarration({ A, B, winner: aWin ? A : B, ga, gb, pens });
-      }
+      // gol decisivo (supplementari) al vincitore designato
+      const w = pickWinner(A, B);
+      if (w === A) ga += 1; else gb += 1;
     }
-    return addNarration({ A, B, winner: ga > gb ? A : B, ga, gb, pens });
+    return addNarration({ A, B, winner: ga > gb ? A : B, ga, gb, pens: null });
   };
-  // doppio confronto andata/ritorno: somma gol, parità -> rigori
+  // doppio confronto andata/ritorno: MAI pareggio aggregato. Se l'aggregato sarebbe pari,
+  // un gol decisivo va al vincitore nella gara di ritorno.
   const playTwoLeg = (A, B) => {
     const a1 = cupGoals(tOf(A), tOf(B), true, rng), b1 = cupGoals(tOf(B), tOf(A), false, rng);  // andata in casa di A
-    const b2 = cupGoals(tOf(B), tOf(A), true, rng), a2 = cupGoals(tOf(A), tOf(B), false, rng);  // ritorno in casa di B
-    const aggA = a1 + a2, aggB = b1 + b2;
-    let pens = null, winner;
+    let b2 = cupGoals(tOf(B), tOf(A), true, rng), a2 = cupGoals(tOf(A), tOf(B), false, rng);    // ritorno in casa di B
+    let aggA = a1 + a2, aggB = b1 + b2;
     if (aggA === aggB) {
-      const pa = tOf(A) + 0.5, pb = tOf(B) + 0.5;
-      const aWin = rng() < pa / (pa + pb);
-      pens = aWin ? [5,4] : [4,5];
-      winner = aWin ? A : B;
-    } else winner = aggA > aggB ? A : B;
-    return addNarration({ A, B, winner, legs: [[a1,b1],[a2,b2]], aggA, aggB, pens });
+      // gol decisivo nel ritorno al vincitore designato
+      const w = pickWinner(A, B);
+      if (w === A) { a2 += 1; aggA += 1; } else { b2 += 1; aggB += 1; }
+    }
+    const winner = aggA > aggB ? A : B;
+    return addNarration({ A, B, winner, legs: [[a1,b1],[a2,b2]], aggA, aggB, pens: null });
   };
 
   // gioca un turno; format: "single" o "two"
@@ -593,6 +592,7 @@ function ordinaleNews(n) { return `${n}°`; }
 
 function simulateSeason(squad, baseSim, forcedSeason, meta = {}) {
   const filled = squad.filter(Boolean);
+  const myName = meta.teamName || "LA TUA SQUADRA";
   const strength = baseSim.strength;
   // forza relativa 0..1 (stesso mapping del record, denom 20)
   const tStr = Math.max(0, Math.min(1, (strength - 72) / 20));
@@ -672,7 +672,7 @@ function simulateSeason(squad, baseSim, forcedSeason, meta = {}) {
 
   // posizione ATTESA: confronto i punti attesi mio vs avversarie (deterministico)
   const expectedTable = [
-    { club: "LA TUA SQUADRA", t: myOppT, pts: expectedPoints(myOppT), me: true },
+    { club: myName, t: myOppT, pts: expectedPoints(myOppT), me: true },
     ...opponents.map(o => ({ club: o.club, t: oppToT(o.str), pts: expectedPoints(oppToT(o.str)), me: false })),
   ].sort((a,b)=>b.pts-a.pts);
   const expectedPos = expectedTable.findIndex(r => r.me) + 1;
@@ -808,7 +808,7 @@ function simulateSeason(squad, baseSim, forcedSeason, meta = {}) {
 
   const myFinalPts = Math.max(0, points - myPenalty);
   const realTable = [
-    { club: "LA TUA SQUADRA", pts: myFinalPts, gd: GF-GA, me: true },
+    { club: myName, pts: myFinalPts, gd: GF-GA, me: true },
     ...oppResults.map(o => ({ ...o, gd: 0 })),
   ].sort((a,b)=> b.pts-a.pts || b.gd-a.gd);
   const realPos = realTable.findIndex(r => r.me) + 1;
@@ -1036,7 +1036,7 @@ function GamesModal({ onClose }) {
 
 function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draftMode, setDraftMode,
                  pickMode, setPickMode, seasonMode, setSeasonMode, chosenSeason, setChosenSeason,
-                 careerMode, setCareerMode, teamMode, setTeamMode, chosenTeam, setChosenTeam, cupMode, setCupMode, startGame }) {
+                 careerMode, setCareerMode, teamMode, setTeamMode, chosenTeam, setChosenTeam, cupMode, setCupMode, teamName, setTeamName, startGame }) {
   const [showInfo, setShowInfo] = useState(false);
   const [showGames, setShowGames] = useState(false);
   return (
@@ -1074,6 +1074,25 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
                      borderColor:hexA(S.gold,0.6), color:S.gold}}>
             🎮 Clicca qui per tutti gli altri nostri giochi
           </button>
+        </div>
+
+        <Label>Nome della squadra <span style={{color:S.gold, fontSize:10}}>NUOVO</span></Label>
+        <input
+          type="text"
+          value={teamName}
+          onChange={(e)=>setTeamName(e.target.value.slice(0, 22))}
+          placeholder={teamMode ? chosenTeam : "La mia squadra"}
+          maxLength={22}
+          style={{
+            width:"100%", boxSizing:"border-box", padding:"12px 14px", fontSize:15, fontWeight:700,
+            background:"rgba(0,0,0,.25)", color:S.cream, border:`2px solid ${hexA(S.gold,0.4)}`,
+            borderRadius:12, outline:"none", marginBottom:4,
+          }}
+        />
+        <div style={{fontSize:11, color:S.cream, opacity:.5, marginBottom:6}}>
+          {teamMode
+            ? "In modalità Squadra puoi lasciare vuoto per usare il nome del club."
+            : "Lascia vuoto per usare “La mia squadra”. Max 22 caratteri."}
         </div>
 
         <Label>Formazione</Label>
@@ -1392,7 +1411,7 @@ function Draft({ formation, squad, round, filledCount, spin, spinning, doSpin, r
 }
 
 // ================== SIMULAZIONE LIVE PARTITA PER PARTITA ==================
-function SeasonLive({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, excludeClub = null, onDone }) {
+function SeasonLive({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, excludeClub = null, teamName = null, onDone }) {
   const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
   const meta = useMemo(()=>({ coach, captain, superSub, excludeClub }), [coach, captain, superSub, excludeClub]);
   const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason, meta), [squad, sim, forcedSeason, meta]);
@@ -1470,7 +1489,7 @@ function SeasonLive({ squad, formation, forcedSeason, bonusTotal = 0, coach = nu
                 return (
                 <div key={i} style={{marginBottom: i<pausedEvent.items.length-1?16:0}}>
                   <div style={{color: e.pts ? "#ff8e8e" : S.gold, fontSize:12, fontWeight:900,
-                    letterSpacing:1.5, marginBottom:6}}>{e.title}{own && " · LA TUA SQUADRA"}</div>
+                    letterSpacing:1.5, marginBottom:6}}>{e.title}{own && ` · ${(season.realTable.find(r=>r.me)||{}).club || "LA TUA SQUADRA"}`}</div>
                   <div style={{color:S.cream, fontSize:19, fontWeight:700, lineHeight:1.35}}>{e.text}</div>
                   {e.pts ? (
                     <div style={{marginTop:8, display:"inline-block", background:"rgba(255,142,142,.18)",
@@ -1593,9 +1612,9 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, excludeClub = null, careerMode = false, careerYear = 1, cupMode = false, onGoCup, onRestart, onAdvance }) {
+function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, excludeClub = null, teamName = null, careerMode = false, careerYear = 1, cupMode = false, onGoCup, onRestart, onAdvance }) {
   const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
-  const meta = useMemo(()=>({ coach, captain, superSub, excludeClub }), [coach, captain, superSub, excludeClub]);
+  const meta = useMemo(()=>({ coach, captain, superSub, excludeClub, teamName }), [coach, captain, superSub, excludeClub, teamName]);
   const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason, meta), [squad, sim, forcedSeason, meta]);
   const [showSeason, setShowSeason] = useState(false);
   const [showStandings, setShowStandings] = useState(false);
@@ -2690,6 +2709,8 @@ export default function App() {
   // ---- Modalità Squadra: pesca solo dalle rose di un club, che prende il tuo posto in campionato ----
   const [teamMode, setTeamMode] = useState(false);
   const [chosenTeam, setChosenTeam] = useState("Roma");
+  // nome della squadra del giocatore (personalizzabile); default sensato
+  const [teamName, setTeamName] = useState("");
   // ---- Coppe: dopo il campionato parte un torneo a eliminazione (opt-in) ----
   const [cupMode, setCupMode] = useState("none"); // none | italia | champions | triplete
   const [cupResult, setCupResult] = useState(null);
@@ -2882,6 +2903,10 @@ export default function App() {
   const hideRatings = DIFFICULTY[difficulty].hideRatings;
   const filledCount = squad.filter(Boolean).length;
   const forcedSeason = seasonMode === "scelta" ? chosenSeason : null;
+  // nome squadra effettivo: quello scritto, o il club (modalità Squadra), o un default
+  const effectiveTeamName = (teamName && teamName.trim())
+    ? teamName.trim()
+    : (teamMode ? chosenTeam : "La mia squadra");
 
   // ---- ONDATA 4: avanza alla stagione successiva (evolve la rosa, poi mercato) ----
   const advanceCareer = useCallback((perf) => {
@@ -2908,7 +2933,7 @@ export default function App() {
     // seasonInfo: { strength, playedSeason, realPos, type }
     const entry = {
       str: seasonInfo.strength,
-      club: teamMode ? chosenTeam : "LA TUA SQUADRA",
+      club: teamMode ? chosenTeam : effectiveTeamName,
       excludeClub: teamMode ? chosenTeam : null,
       seedHash: Math.floor(seasonInfo.strength * 1000) ^ (seasonInfo.playedSeason.charCodeAt(0) * 31),
     };
@@ -2928,7 +2953,7 @@ export default function App() {
     }
     setCupResult(cup);
     setPhase("cuplive");
-  }, [teamMode, chosenTeam, squad]);
+  }, [teamMode, chosenTeam, squad, effectiveTeamName]);
 
   // ---- TRIPLETE: dopo la Coppa Italia, prosegui con la Coppa Campioni ----
   const goToChampionsTriplete = useCallback(() => {
@@ -2938,10 +2963,10 @@ export default function App() {
   }, [tripleteState, goToCup]);
 
   // ============ RENDER ============
-  if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,careerMode,setCareerMode,teamMode,setTeamMode,chosenTeam,setChosenTeam,cupMode,setCupMode,startGame}} />;
+  if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,careerMode,setCareerMode,teamMode,setTeamMode,chosenTeam,setChosenTeam,cupMode,setCupMode,teamName,setTeamName,startGame}} />;
   if (phase === "bonus") return <BonusSelect {...{squad, formation, usedIds, teamClub: teamMode ? chosenTeam : null, onConfirm:({bonusTotal,coach,captain,superSub,finalSquad})=>{ setSquad(finalSquad); if(finalSquad!==squad){ const s=new Set(usedIds); finalSquad.forEach(p=>p&&s.add(p.pid)); setUsedIds(s);} setBonusTotal(bonusTotal); setCoach(coach); setCaptain(captain); setSuperSub(superSub); setPhase("season"); }}} />;
-  if (phase === "season") return <SeasonLive {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, onDone:()=>setPhase("result")}} />;
-  if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, careerMode, careerYear, cupMode, onGoCup:goToCup, onRestart:()=>setPhase("setup"), onAdvance:advanceCareer}} />;
+  if (phase === "season") return <SeasonLive {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, teamName: effectiveTeamName, onDone:()=>setPhase("result")}} />;
+  if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, teamName: effectiveTeamName, careerMode, careerYear, cupMode, onGoCup:goToCup, onRestart:()=>setPhase("setup"), onAdvance:advanceCareer}} />;
   if (phase === "market") return <Market {...{squad, formation, usedIds, forcedSeason, careerYear, careerEvo, difficulty, teamClub: teamMode ? chosenTeam : null, onConfirm:finishMarket}} />;
   if (phase === "cuplive") return <CupLive {...{cup:cupResult, onDone:()=>setPhase("cup")}} />;
   if (phase === "cup") return <CupBracket {...{cup:cupResult, tripleteState, onNextTriplete:goToChampionsTriplete, onBack:()=>setPhase("result"), onRestart:()=>{setTripleteState(null); setPhase("setup");}}} />;
