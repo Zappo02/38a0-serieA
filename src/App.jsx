@@ -94,6 +94,9 @@ const DIFFICULTY = {
   hard:   { label: "Difficile", rerolls: 0, hideRatings: true },
 };
 
+// ---- Coppa Campioni: 13 top club europei (rose reali dal file), per il torneo ----
+const CC_TEAMS = {"Bayer 04 Leverkusen":{"s":81.5,"p":[["Grimaldo",85,["LW","LB","CAM"]],["P. Schick",85,["ST"]],["Aleix García",84,["CM","CAM"]],["E. Palacios",83,["CM"]],["P. Hincapié",83,["LB","CB"]],["E. Tapsoba",82,["CB"]],["R. Andrich",79,["CB","CM"]],["I. Maza",79,["CAM","CM"]],["M. Tillman",79,["CAM","CM","LW"]],["M. Terrier",79,["CAM","ST","LW"]],["V. Boniface",79,["ST"]],["M. Flekken",78,["GK"]],["N. Tella",78,["RW","ST","CAM"]],["L. Badé",78,["CB"]],["Lucas Vázquez",77,["RB","RW"]],["J. Hofmann",77,["CAM","ST","CM"]],["J. Quansah",76,["CB"]],["E. Poku",76,["RW","LW"]],["C. Kofane",76,["ST"]],["E. Fernández",76,["CM"]]]},"Athletic Club":{"s":81.4,"p":[["Nico Williams",85,["LW"]],["Unai Simón",84,["GK"]],["Vivian",82,["CB"]],["A. Laporte",82,["CB"]],["Sancet",82,["CAM","CM","ST"]],["Iñaki Williams",81,["RW","ST"]],["Ruiz de Galarreta",80,["CM"]],["Jauregizar",80,["CM"]],["Berenguer",80,["RW","LW","CAM"]],["Yeray",80,["CB"]],["Yuri Berchiche",79,["LB","LW"]],["Guruzeta",78,["ST"]],["Aitor Paredes",78,["CB"]],["Beñat Prados",77,["CM","CB"]],["Gorosabel",76,["RB","RW"]],["Robert Navarro",76,["RW","LW"]],["Areso",76,["RB","RW"]],["Agirrezabala",76,["GK"]],["Hugo Rincón",74,["RB","RW"]],["A. Boiro",73,["LB","LW"]]]},"Borussia Dortmund":{"s":82.8,"p":[["G. Kobel",86,["GK"]],["N. Schlotterbeck",86,["CB"]],["S. Guirassy",85,["ST"]],["F. Nmecha",84,["CM"]],["W. Anton",83,["CB"]],["J. Brandt",82,["CAM","CM"]],["K. Adeyemi",82,["RW","LW","CAM"]],["E. Can",82,["CB"]],["M. Sabitzer",81,["CM","CAM"]],["J. Ryerson",80,["RB","LB","RW"]],["M. Beier",80,["ST","CAM","LW"]],["R. Bensebaini",79,["CB","LB","LW"]],["D. Svensson",79,["LB","CM","LW"]],["Fábio Silva",79,["ST","CAM","LW"]],["C. Chukwuemeka",78,["CAM","CM"]],["J. Bellingham",77,["CM"]],["Yan Couto",77,["RB","RW"]],["D. Ramaj",75,["GK"]],["A. Meyer",74,["GK"]],["S. Özcan",74,["CM","CB"]]]},"Newcastle United":{"s":81.8,"p":[["Bruno Guimarães",86,["CM"]],["S. Tonali",85,["CM"]],["A. Gordon",82,["LW","ST","RW"]],["F. Schär",82,["CB"]],["M. Thiaw",81,["CB"]],["S. Botman",81,["CB"]],["L. Hall",81,["LB","LW"]],["Joelinton",81,["CM"]],["Y. Wissa",81,["ST"]],["H. Barnes",80,["LW","RW"]],["D. Burn",80,["CB","LB"]],["N. Woltemade",80,["ST","CM"]],["T. Livramento",80,["RB","LB","RW"]],["K. Trippier",79,["RB","RW"]],["J. Murphy",79,["RW"]],["A. Elanga",79,["RW"]],["N. Pope",79,["GK"]],["A. Ramsdale",77,["GK"]],["J. Ramsey",77,["CM","LW","CAM"]],["J. Willock",76,["CM","CAM"]]]},"Aston Villa":{"s":82.5,"p":[["E. Martínez",85,["GK"]],["Y. Tielemans",85,["CM","CAM"]],["E. Konsa",84,["CB"]],["M. Rogers",84,["CAM","LW","CM"]],["B. Kamara",84,["CM"]],["O. Watkins",82,["ST"]],["M. Cash",81,["RB","RW"]],["A. Onana",81,["CM"]],["J. McGinn",81,["RW","LW","CAM","RB"]],["Pau Torres",80,["CB"]],["L. Digne",80,["LB","LW"]],["J. Sancho",79,["LW","RW"]],["Douglas Luiz",79,["CM"]],["I. Maatsen",79,["LB","LW"]],["E. Buendía",78,["LW","CAM"]],["M. Bizot",78,["GK"]],["L. Bailey",78,["RW"]],["T. Mings",78,["CB"]],["H. Elliott",78,["CAM","CM","RW"]],["R. Barkley",77,["CM","CAM"]]]},"Atlético Madrid":{"s":83.8,"p":[["J. Oblak",88,["GK"]],["J. Alvarez",86,["ST","CAM"]],["Marcos Llorente",85,["RB","RW","CM"]],["A. Griezmann",84,["ST","CAM"]],["D. Hancko",83,["LB","CB"]],["Pablo Barrios",83,["CM"]],["A. Lookman",83,["ST","CAM","LW"]],["A. Sørloth",83,["ST","RW"]],["J. Giménez",83,["CB"]],["Giuliano",82,["RW","LW"]],["Álex Baena",82,["LW","CM"]],["Koke",81,["CM"]],["R. Le Normand",81,["CB"]],["Pubill",80,["CB","RB","RW"]],["Johnny Cardoso",80,["CM"]],["J. Musso",80,["GK"]],["N. Gonzalez",79,["LW","RW","CAM"]],["M. Ruggeri",78,["LB","LW"]],["T. Almada",78,["CAM","LW","CM"]],["N. Molina",77,["RB"]]]},"FC Bayern München":{"s":86.1,"p":[["H. Kane",90,["ST"]],["J. Kimmich",89,["RB","CM"]],["M. Olise",89,["RW","CAM"]],["J. Tah",87,["CB"]],["L. Díaz",87,["LW","ST"]],["J. Musiala",87,["CAM","LW","CM","ST"]],["D. Upamecano",86,["CB"]],["K. Laimer",84,["RB","LB","RW"]],["A. Davies",83,["LB","LW"]],["S. Gnabry",83,["CAM","LW","ST"]],["M. Neuer",82,["GK"]],["A. Pavlović",82,["CM"]],["Kim Min Jae",82,["CB"]],["L. Goretzka",81,["CM"]],["J. Stanišić",79,["RB","CB","LB","RW"]],["R. Guerreiro",79,["LB","CM","RB","LW"]],["N. Jackson",79,["ST"]],["T. Bischof",78,["CM","LB"]],["H. Ito",78,["CB","LB"]],["J. Urbig",77,["GK"]]]},"Manchester City":{"s":86.0,"p":[["E. Haaland",91,["ST"]],["G. Donnarumma",89,["GK"]],["Rodri",89,["CM"]],["Rúben Dias",87,["CB"]],["T. Reijnders",85,["CM","CAM"]],["P. Foden",85,["CAM","CM","RW"]],["J. Gvardiol",85,["CB","LB","LW"]],["M. Guéhi",84,["CB"]],["A. Semenyo",84,["RW","LW"]],["R. Cherki",84,["RW","CAM"]],["Bernardo Silva",83,["CM","RW"]],["J. Doku",83,["LW","RW"]],["O. Marmoush",83,["LW","ST"]],["Matheus Nunes",82,["RB","CM","RW"]],["N. Aké",82,["CB","LB"]],["J. Stones",82,["CB","RB"]],["M. Kovačić",82,["CM","CAM"]],["N. O'Reilly",81,["LB","CM"]],["Nico González",81,["CM"]],["R. Aït-Nouri",81,["LB","LW"]]]},"Liverpool":{"s":86.2,"p":[["M. Salah",89,["RW","CAM"]],["Alisson",88,["GK"]],["V. van Dijk",88,["CB"]],["F. Wirtz",87,["CAM","LW","CM"]],["A. Isak",87,["ST"]],["D. Szoboszlai",86,["CAM","RB","CM"]],["R. Gravenberch",86,["CM"]],["A. Mac Allister",85,["CM"]],["H. Ekitiké",85,["ST","CAM"]],["I. Konaté",84,["CB"]],["C. Gakpo",83,["LW"]],["G. Mamardashvili",83,["GK"]],["J. Frimpong",82,["RB","RW"]],["A. Robertson",81,["LB","LW"]],["M. Kerkez",81,["LB","LW"]],["C. Jones",80,["CM","CAM"]],["F. Chiesa",80,["RW","ST"]],["J. Gomez",79,["CB","RB","LB","RW"]],["C. Bradley",79,["RB","RW"]],["W. Endo",79,["CM"]]]},"Arsenal":{"s":86.1,"p":[["Gabriel",89,["CB"]],["W. Saliba",88,["CB"]],["D. Rice",88,["CM"]],["David Raya",87,["GK"]],["B. Saka",87,["RW"]],["V. Gyökeres",86,["ST"]],["M. Ødegaard",86,["CM","CAM"]],["Zubimendi",85,["CM"]],["J. Timber",84,["RB","LB","CB","RW"]],["E. Eze",84,["CAM","CM","LW"]],["L. Trossard",83,["LW"]],["P. Hincapié",83,["LB","CB"]],["Mikel Merino",83,["CM","ST"]],["R. Calafiori",82,["LB","CB","CM"]],["B. White",82,["RB","CM"]],["K. Havertz",82,["ST","CAM","CM"]],["Gabriel Martinelli",81,["LW","CM"]],["N. Madueke",80,["RW"]],["C. Nørgaard",80,["CM"]],["Gabriel Jesus",80,["ST","CAM"]]]},"Real Madrid":{"s":86.6,"p":[["K. Mbappé",91,["ST","LW"]],["T. Courtois",90,["GK"]],["F. Valverde",89,["CM","RB","RW"]],["J. Bellingham",89,["CAM","CM","LW"]],["Vini Jr.",89,["LW","ST"]],["T. Alexander-Arnold",85,["RB","RW"]],["A. Rüdiger",84,["CB"]],["A. Tchouaméni",84,["CM","CB"]],["Carvajal",84,["RB","RW"]],["Rodrygo",84,["LW","RW","ST"]],["Éder Militão",84,["CB"]],["A. Güler",83,["RW","CM","CAM"]],["D. Huijsen",81,["CB"]],["Álvaro Carreras",81,["LB","CB","LW"]],["Brahim",81,["RW"]],["E. Camavinga",81,["CM","LB"]],["F. Mendy",81,["LB","LW"]],["A. Lunin",80,["GK"]],["D. Alaba",80,["CB"]],["Dani Ceballos",80,["CM","CAM"]]]},"Paris Saint-Germain":{"s":87.5,"p":[["Vitinha",90,["CM","CAM"]],["O. Dembélé",90,["ST","RW","CAM"]],["A. Hakimi",89,["RB","RW"]],["W. Pacho",88,["CB"]],["Nuno Mendes",88,["LB","LW"]],["João Neves",88,["CM"]],["K. Kvaratskhelia",88,["LW","RW"]],["Marquinhos",87,["CB"]],["D. Doué",86,["RW","LW","CM"]],["Fabián Ruiz",85,["CM"]],["B. Barcola",84,["LW","RW"]],["W. Zaïre-Emery",83,["CM","RB","CAM"]],["M. Safonov",82,["GK"]],["L. Chevalier",82,["GK"]],["L. Hernández",81,["LB","CB","CM"]],["I. Zabarnyi",80,["CB"]],["Lee Kang In",80,["RW","CM","CAM"]],["Gonçalo Ramos",80,["ST"]],["Lucas Beraldo",78,["CB","CM"]],["S. Mayulu",77,["CM","ST"]]]},"FC Barcelona":{"s":86.2,"p":[["Pedri",90,["CM","CAM"]],["Lamine Yamal",89,["RW"]],["Raphinha",89,["LW","CAM","RW"]],["F. de Jong",87,["CM","CAM"]],["Joan García",86,["GK"]],["J. Koundé",86,["RB","RW"]],["R. Lewandowski",86,["ST"]],["João Cancelo",84,["RB","LB","RW"]],["Ferran Torres",84,["ST","LW"]],["Dani Olmo",84,["CAM","CM"]],["Pau Cubarsí",83,["CB"]],["Eric García",83,["CB","RB","RW"]],["Fermín",83,["CAM","CM","ST"]],["Gavi",83,["CM","CAM"]],["Balde",83,["LB","LW"]],["W. Szczęsny",83,["GK"]],["M. Rashford",82,["LW","ST"]],["R. Araujo",81,["CB"]],["A. Christensen",80,["CB","CM"]],["Gerard Martín",78,["CB","LB"]]]}};
+
 const CLUBS = [...new Set(PLAYERS.map(p => p.c))].sort();
 const SEASONS = [...new Set(PLAYERS.map(p => p.s))].sort();
 // stagioni reali (escluse le Legends): usate per simulare gli avversari del campionato
@@ -327,18 +330,23 @@ function cupGoals(myT, oppT, home, rng) {
 const BRACKET16 = [1,16,8,9,5,12,4,13,3,14,6,11,7,10,2,15];
 
 function simulateCup(season, myEntry, squad = null) {
-  const rng = mulberry32(((myEntry.seedHash || 12345) ^ 0xc0ffee) >>> 0);
-  // 15 avversarie più forti della stagione (escludo la squadra del giocatore se in team mode)
+  // Coppa Italia: 16 = la mia + le 15 avversarie più forti della stagione
+  const rng0 = mulberry32(((myEntry.seedHash || 12345) ^ 0xc0ffee) >>> 0);
   const rivals = opponentsForSeason(season, myEntry.excludeClub || null).slice(0, 15);
-  // entità: la mia + le rivali, con forza
-  const me = { club: myEntry.club || "LA TUA SQUADRA", str: myEntry.str, me: true };
-  let teams = [me, ...rivals.map(r => ({ club: r.club, str: r.str, me: false }))];
-  // se per qualche motivo non arriviamo a 16, completiamo con le successive
-  if (teams.length < 16) {
-    const extra = opponentsForSeason(season, myEntry.excludeClub || null).slice(15, 15 + (16 - teams.length));
-    teams = teams.concat(extra.map(r => ({ club: r.club, str: r.str, me: false })));
+  const me0 = { club: myEntry.club || "LA TUA SQUADRA", str: myEntry.str, me: true };
+  let teams0 = [me0, ...rivals.map(r => ({ club: r.club, str: r.str, me: false }))];
+  if (teams0.length < 16) {
+    const extra = opponentsForSeason(season, myEntry.excludeClub || null).slice(15, 15 + (16 - teams0.length));
+    teams0 = teams0.concat(extra.map(r => ({ club: r.club, str: r.str, me: false })));
   }
-  teams = teams.slice(0, 16);
+  return runCupBracket({ season, teams16: teams0.slice(0,16), squad, seedHash: myEntry.seedHash, oppRosterFn: null, title: "Coppa Italia" });
+}
+
+// motore generico del torneo a 16 (usato da Coppa Italia e Coppa Campioni)
+function runCupBracket({ season, teams16, squad = null, seedHash = 12345, oppRosterFn = null, title = "Coppa" }) {
+  const rng = mulberry32(((seedHash || 12345) ^ 0xc0ffee) >>> 0);
+  let teams = teams16.slice(0, 16);
+  const me = teams.find(t => t.me) || teams[0];
   // seeding per forza: 1 = più forte
   teams.sort((a,b)=>b.str-a.str);
   const seeded = teams.map((t,i)=>({ ...t, seed: i+1 }));
@@ -482,14 +490,16 @@ function simulateCup(season, myEntry, squad = null) {
   // Ogni voce: round, leg ("Andata"/"Ritorno"/null), avversario, casa, eventi gol ordinati
   // per minuto (mine: true/false, name), risultato finale e aggregato dopo questa gara.
   const oppRoster = (club) => {
+    if (oppRosterFn) { const r = oppRosterFn(club); if (r && r.length) return r; }
     const r = PLAYERS.filter(p => p.c===club && p.s===season);
     return r.length ? r : null;
   };
   const oppScorerName = (club) => {
     const r = oppRoster(club);
     if (!r) return club;
-    // pesa verso attaccanti/centrocampisti offensivi
-    const w = (p)=> ["ST"].includes(p.r)?10 : ["RW","LW","CAM","RM","LM"].includes(p.r)?6 : ["CM","CDM"].includes(p.r)?2.5 : ["RB","LB"].includes(p.r)?1 : p.r==="CB"?0.7 : 0;
+    // pesa verso attaccanti/centrocampisti offensivi (r[i].r = ruolo primario)
+    const roleOf = (p) => p.r || (p.roles && p.roles[0]) || "CM";
+    const w = (p)=>{ const rr=roleOf(p); return ["ST"].includes(rr)?10 : ["RW","LW","CAM","RM","LM"].includes(rr)?6 : ["CM","CDM"].includes(rr)?2.5 : ["RB","LB"].includes(rr)?1 : rr==="CB"?0.7 : 0; };
     const pool = r.filter(p=>w(p)>0); if(!pool.length) return r[0].n;
     const tot = pool.reduce((s,p)=>s+w(p),0);
     let x = rng()*tot; for(const p of pool){ x-=w(p); if(x<=0) return p.n; }
@@ -526,7 +536,41 @@ function simulateCup(season, myEntry, squad = null) {
     }
   }
 
-  return { season, seeded, rounds: { r16, qf, sf, final }, champion, reached, myPath, myMatches };
+  return { season, seeded, rounds: { r16, qf, sf, final }, champion, reached, myPath, myMatches, title };
+}
+
+// ---- Coppa Campioni: costruisce le 16 e lancia il torneo ----
+// 16 = la tua + 3 top italiane della stagione + 12 europee (le più forti del file).
+function simulateChampions(season, myEntry, squad = null) {
+  const rng = mulberry32(((myEntry.seedHash || 777) ^ 0x1abe11) >>> 0);
+  const me = { club: myEntry.club || "LA TUA SQUADRA", str: myEntry.str, me: true };
+  // 3 top italiane della stagione (avversarie più forti in Serie A)
+  const ita = opponentsForSeason(season, myEntry.excludeClub || null).slice(0, 3)
+    .map(r => ({ club: r.club, str: r.str, me: false, euro: false }));
+  // 12 europee più forti dal file
+  const euro = Object.entries(CC_TEAMS)
+    .map(([club, d]) => ({ club, str: d.s, me: false, euro: true }))
+    .sort((a,b)=>b.str-a.str)
+    .slice(0, 12);
+  let teams = [me, ...ita, ...euro];
+  // se manca qualcosa (stagione con poche italiane), completo con altre europee/italiane
+  if (teams.length < 16) {
+    const moreEuro = Object.entries(CC_TEAMS).map(([club,d])=>({club,str:d.s,me:false,euro:true}))
+      .sort((a,b)=>b.str-a.str).slice(12);
+    teams = teams.concat(moreEuro).slice(0,16);
+  }
+  if (teams.length < 16) {
+    const moreIta = opponentsForSeason(season, myEntry.excludeClub || null).slice(3)
+      .map(r=>({club:r.club,str:r.str,me:false,euro:false}));
+    teams = teams.concat(moreIta).slice(0,16);
+  }
+  // funzione rosa per i marcatori europei
+  const oppRosterFn = (club) => {
+    const d = CC_TEAMS[club];
+    if (!d) return null;
+    return d.p.map(([n, rt, roles]) => ({ n, rt, r: (roles && roles[0]) || "CM", roles }));
+  };
+  return runCupBracket({ season, teams16: teams.slice(0,16), squad, seedHash: myEntry.seedHash, oppRosterFn, title: "Coppa Campioni" });
 }
 
 // Calendario: ogni avversaria affrontata 2 volte (andata/ritorno), una casa una trasferta.
@@ -1085,22 +1129,21 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
 
         <Label>Coppe <span style={{color:S.gold, fontSize:10}}>NUOVO</span></Label>
         <div style={chipRow}>
-          <button onClick={()=>setCupMode(false)} style={chip(!cupMode)}>
+          <button onClick={()=>setCupMode("none")} style={chip(cupMode==="none")}>
             Solo campionato
             <span style={{display:"block", fontSize:10, opacity:.7, fontWeight:400}}>la stagione classica</span>
           </button>
-          <button onClick={()=>setCupMode(true)} style={chip(cupMode)}>
-            🏆 Anche la Coppa Italia
-            <span style={{display:"block", fontSize:10, opacity:.7, fontWeight:400}}>dopo il campionato, torneo a eliminazione</span>
+          <button onClick={()=>setCupMode("italia")} style={chip(cupMode==="italia")}>
+            🏆 Coppa Italia
+            <span style={{display:"block", fontSize:10, opacity:.7, fontWeight:400}}>16 italiane, dopo il campionato</span>
           </button>
         </div>
         <div style={{marginTop:8}}>
-          <button disabled aria-disabled="true" style={{
-            ...chip(false), width:"100%", cursor:"not-allowed", opacity:.55,
-            borderStyle:"dashed",
-          }}>
-            ⭐ Anche la Champions League
-            <span style={{display:"block", fontSize:10, opacity:.85, fontWeight:400, color:S.gold}}>in uscita entro il 20 luglio</span>
+          <button onClick={()=>setCupMode("champions")} style={{...chip(cupMode==="champions"), width:"100%"}}>
+            ⭐ Coppa Campioni
+            <span style={{display:"block", fontSize:10, opacity:.75, fontWeight:400}}>
+              i top club d'Europa. Ti qualifichi arrivando almeno 4ª in Serie A (o sempre, se giochi una sola stagione)
+            </span>
           </button>
         </div>
 
@@ -1807,12 +1850,27 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
         {showStandings && <StandingsTable season={season} />}
 
         <div style={{display:"flex", gap:10, justifyContent:"center", marginTop:16, flexWrap:"wrap"}}>
-          {cupMode && (
-            <button onClick={()=>onGoCup({ strength: sim.strength, playedSeason: season.season })}
+          {cupMode === "italia" && (
+            <button onClick={()=>onGoCup({ strength: sim.strength, playedSeason: season.season, type: "italia" })}
               style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
               🏆 VAI ALLA COPPA ITALIA
             </button>
           )}
+          {cupMode === "champions" && (() => {
+            // qualificazione: almeno 4° in Serie A, OPPURE stagione singola (non carriera)
+            const qualified = !careerMode || season.realPos <= 4;
+            return qualified ? (
+              <button onClick={()=>onGoCup({ strength: sim.strength, playedSeason: season.season, type: "champions" })}
+                style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
+                ⭐ VAI ALLA COPPA CAMPIONI
+              </button>
+            ) : (
+              <div style={{...bigBtnSm, background:"rgba(0,0,0,.25)", color:hexA(S.cream,0.7), width:"100%",
+                textAlign:"center", cursor:"default", border:`1px solid ${hexA(S.cream,0.2)}`}}>
+                ⭐ Coppa Campioni — non qualificato ({ordinaleShort(season.realPos)} posto, serve almeno 4°)
+              </div>
+            );
+          })()}
           <button onClick={()=>{setShowSeason(s=>!s); setShowStandings(false);}} style={bigBtnSm}>
             {showSeason ? "👥 Vedi la rosa" : "📅 Calendario"}
           </button>
@@ -2421,7 +2479,7 @@ function CupLive({ cup, onDone }) {
       <div style={{maxWidth:560, margin:"0 auto", padding:"0 16px"}}>
         <div style={{...panel, marginBottom:14, textAlign:"center"}}>
           <div style={{fontSize:30}}>🏆</div>
-          <div style={{color:S.gold, fontWeight:900, fontSize:17, letterSpacing:1}}>COPPA ITALIA {cup.season}</div>
+          <div style={{color:S.gold, fontWeight:900, fontSize:17, letterSpacing:1}}>{(cup.title||"Coppa Italia").toUpperCase()} {cup.season}</div>
           <div style={{color:S.cream, opacity:.6, fontSize:12, marginTop:2}}>Il tuo cammino verso il trofeo</div>
         </div>
 
@@ -2538,7 +2596,7 @@ function CupBracket({ cup, onBack, onRestart }) {
       <div style={{maxWidth:980, margin:"0 auto", padding:"0 16px"}}>
         <div style={{...panel, textAlign:"center", borderColor:S.gold, marginBottom:16}}>
           <div style={{fontSize:44}}>🏆</div>
-          <div style={{color:S.gold, fontSize:26, fontWeight:900, letterSpacing:1}}>COPPA ITALIA {season}</div>
+          <div style={{color:S.gold, fontSize:26, fontWeight:900, letterSpacing:1}}>{(cup.title||"Coppa Italia").toUpperCase()} {season}</div>
           {meWon
             ? <div style={{color:S.gold, fontSize:18, fontWeight:800, marginTop:6}}>🎉 L'HAI VINTA! Sei campione d'Italia!</div>
             : <div style={{color:S.cream, opacity:.85, fontSize:16, marginTop:6}}>
@@ -2589,7 +2647,7 @@ export default function App() {
   const [teamMode, setTeamMode] = useState(false);
   const [chosenTeam, setChosenTeam] = useState("Roma");
   // ---- Coppa Italia: dopo il campionato parte un torneo a eliminazione (opt-in) ----
-  const [cupMode, setCupMode] = useState(false);
+  const [cupMode, setCupMode] = useState("none"); // none | italia | champions
   const [cupResult, setCupResult] = useState(null);
 
   const formation = FORMATIONS[formationKey];
@@ -2800,13 +2858,16 @@ export default function App() {
 
   // ---- COPPA ITALIA: calcola il torneo e mostra il bracket ----
   const goToCup = useCallback((seasonInfo) => {
-    // seasonInfo: { strength, playedSeason } passati dal Result
-    const cup = simulateCup(seasonInfo.playedSeason, {
+    // seasonInfo: { strength, playedSeason, type } passati dal Result
+    const entry = {
       str: seasonInfo.strength,
       club: teamMode ? chosenTeam : "LA TUA SQUADRA",
       excludeClub: teamMode ? chosenTeam : null,
       seedHash: Math.floor(seasonInfo.strength * 1000) ^ (seasonInfo.playedSeason.charCodeAt(0) * 31),
-    }, squad);
+    };
+    const cup = seasonInfo.type === "champions"
+      ? simulateChampions(seasonInfo.playedSeason, entry, squad)
+      : simulateCup(seasonInfo.playedSeason, entry, squad);
     setCupResult(cup);
     setPhase("cuplive");
   }, [teamMode, chosenTeam, squad]);
