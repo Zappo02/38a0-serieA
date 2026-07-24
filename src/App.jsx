@@ -1146,6 +1146,15 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
             </span>
           </button>
         </div>
+        <div style={{marginTop:8}}>
+          <button onClick={()=>setCupMode("triplete")} style={{...chip(cupMode==="triplete"), width:"100%",
+            ...(cupMode==="triplete" ? {boxShadow:`0 0 0 2px ${S.gold} inset`} : {})}}>
+            👑 TRIPLETE
+            <span style={{display:"block", fontSize:10, opacity:.75, fontWeight:400}}>
+              campionato + Coppa Italia + Coppa Campioni. Vincile tutte e tre per l'impresa!
+            </span>
+          </button>
+        </div>
 
         <Label>Modalità Squadra <span style={{color:S.gold, fontSize:10}}>NUOVO</span></Label>
         <div style={chipRow}>
@@ -1850,10 +1859,10 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
         {showStandings && <StandingsTable season={season} />}
 
         <div style={{display:"flex", gap:10, justifyContent:"center", marginTop:16, flexWrap:"wrap"}}>
-          {cupMode === "italia" && (
-            <button onClick={()=>onGoCup({ strength: sim.strength, playedSeason: season.season, type: "italia" })}
+          {(cupMode === "italia" || cupMode === "triplete") && (
+            <button onClick={()=>onGoCup({ strength: sim.strength, playedSeason: season.season, realPos: season.realPos, type: cupMode === "triplete" ? "triplete-italia" : "italia" })}
               style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
-              🏆 VAI ALLA COPPA ITALIA
+              {cupMode === "triplete" ? "👑 INIZIA IL TRIPLETE — COPPA ITALIA" : "🏆 VAI ALLA COPPA ITALIA"}
             </button>
           )}
           {cupMode === "champions" && (() => {
@@ -2544,10 +2553,21 @@ function CupLive({ cup, onDone }) {
 }
 
 // ================== COPPA ITALIA: tabellone visivo (bracket) ==================
-function CupBracket({ cup, onBack, onRestart }) {
+function CupBracket({ cup, onBack, onRestart, tripleteState = null, onNextTriplete = null }) {
   if (!cup) return null;
   const { season, rounds, champion, reached } = cup;
   const meWon = champion.me;
+  // testo vittoria in base al torneo
+  const isChampions = cup.title === "Coppa Campioni";
+  const champTxt = isChampions ? "Sei campione d'Europa!" : "Sei campione d'Italia!";
+  // stato triplete
+  const inTriplete = !!cup.triplete;
+  const isTripleteItalia = cup.triplete === "italia";
+  const isTripleteChampions = cup.triplete === "champions";
+  const isTripleteItaliaWon = isTripleteItalia && meWon; // ha vinto la Coppa Italia del triplete
+  // triplete completato = ha vinto campionato (realPos 1) + Coppa Italia + Coppa Campioni
+  const tripleteDone = isTripleteChampions && meWon && tripleteState
+    && tripleteState.italia === "Vittoria" && tripleteState.realPos === 1;
 
   // riquadro di una singola sfida
   const MatchCard = ({ m, twoLeg }) => {
@@ -2595,14 +2615,25 @@ function CupBracket({ cup, onBack, onRestart }) {
       <Header small />
       <div style={{maxWidth:980, margin:"0 auto", padding:"0 16px"}}>
         <div style={{...panel, textAlign:"center", borderColor:S.gold, marginBottom:16}}>
-          <div style={{fontSize:44}}>🏆</div>
+          <div style={{fontSize:44}}>{tripleteDone ? "👑" : "🏆"}</div>
           <div style={{color:S.gold, fontSize:26, fontWeight:900, letterSpacing:1}}>{(cup.title||"Coppa Italia").toUpperCase()} {season}</div>
           {meWon
-            ? <div style={{color:S.gold, fontSize:18, fontWeight:800, marginTop:6}}>🎉 L'HAI VINTA! Sei campione d'Italia!</div>
+            ? <div style={{color:S.gold, fontSize:18, fontWeight:800, marginTop:6}}>🎉 L'HAI VINTA! {champTxt}</div>
             : <div style={{color:S.cream, opacity:.85, fontSize:16, marginTop:6}}>
                 La tua squadra è uscita: <b style={{color:S.gold}}>{reached}</b>.
                 Trofeo a <b>{champion.club}</b>.
               </div>}
+          {tripleteDone && (
+            <div style={{marginTop:12, padding:"12px 16px", background:hexA(S.gold,0.18), border:`2px solid ${S.gold}`, borderRadius:12}}>
+              <div style={{fontSize:22, fontWeight:900, color:S.gold, letterSpacing:1}}>👑 TRIPLETE COMPLETATO! 👑</div>
+              <div style={{color:S.cream, fontSize:14, marginTop:4}}>Campionato, Coppa Italia e Coppa Campioni nella stessa stagione. Leggendario.</div>
+            </div>
+          )}
+          {isTripleteItaliaWon && (
+            <div style={{marginTop:10, color:S.cream, opacity:.9, fontSize:14}}>
+              Primo trofeo del Triplete in bacheca. Ora l'Europa: prosegui con la Coppa Campioni!
+            </div>
+          )}
         </div>
 
         <div style={{display:"flex", gap:14, overflowX:"auto", paddingBottom:12, justifyContent:"flex-start"}}>
@@ -2623,6 +2654,19 @@ function CupBracket({ cup, onBack, onRestart }) {
         </div>
 
         <div style={{display:"flex", gap:10, justifyContent:"center", marginTop:20, flexWrap:"wrap"}}>
+          {isTripleteItalia && onNextTriplete && (() => {
+            const qualified = tripleteState && tripleteState.realPos <= 4;
+            return qualified ? (
+              <button onClick={onNextTriplete} style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
+                ⭐ PROSEGUI IL TRIPLETE — COPPA CAMPIONI
+              </button>
+            ) : (
+              <div style={{...bigBtnSm, background:"rgba(0,0,0,.25)", color:hexA(S.cream,0.7), width:"100%",
+                textAlign:"center", cursor:"default", border:`1px solid ${hexA(S.cream,0.2)}`}}>
+                Triplete interrotto: non qualificato alla Coppa Campioni (servirebbe almeno 4° in campionato)
+              </div>
+            );
+          })()}
           <button onClick={onBack} style={{...bigBtnSm, background:"transparent", border:`2px solid ${S.gold}`, color:S.gold}}>
             ↩ Torna al campionato
           </button>
@@ -2646,9 +2690,11 @@ export default function App() {
   // ---- Modalità Squadra: pesca solo dalle rose di un club, che prende il tuo posto in campionato ----
   const [teamMode, setTeamMode] = useState(false);
   const [chosenTeam, setChosenTeam] = useState("Roma");
-  // ---- Coppa Italia: dopo il campionato parte un torneo a eliminazione (opt-in) ----
-  const [cupMode, setCupMode] = useState("none"); // none | italia | champions
+  // ---- Coppe: dopo il campionato parte un torneo a eliminazione (opt-in) ----
+  const [cupMode, setCupMode] = useState("none"); // none | italia | champions | triplete
   const [cupResult, setCupResult] = useState(null);
+  // Triplete: memorizzo l'esito delle coppe già giocate e i dati per lanciare la successiva
+  const [tripleteState, setTripleteState] = useState(null); // { italia: reached|null, champions: reached|null, strength, playedSeason }
 
   const formation = FORMATIONS[formationKey];
   const [squad, setSquad] = useState([]);        // array allineato a slots
@@ -2701,6 +2747,7 @@ export default function App() {
     }
     setFreePicks(fp);
     setCareerYear(1); setCareerHistory([]); setCareerEvo(null);
+    setTripleteState(null); setCupResult(null);
     setPhase("draft");
   }, [formation, difficulty, pickMode]);
 
@@ -2856,21 +2903,39 @@ export default function App() {
     setPhase("bonus"); // nuova stagione: si ripassa dai bonus pre-partita
   }, []);
 
-  // ---- COPPA ITALIA: calcola il torneo e mostra il bracket ----
+  // ---- COPPE: calcola il torneo e mostra il bracket (gestisce anche il Triplete) ----
   const goToCup = useCallback((seasonInfo) => {
-    // seasonInfo: { strength, playedSeason, type } passati dal Result
+    // seasonInfo: { strength, playedSeason, realPos, type }
     const entry = {
       str: seasonInfo.strength,
       club: teamMode ? chosenTeam : "LA TUA SQUADRA",
       excludeClub: teamMode ? chosenTeam : null,
       seedHash: Math.floor(seasonInfo.strength * 1000) ^ (seasonInfo.playedSeason.charCodeAt(0) * 31),
     };
-    const cup = seasonInfo.type === "champions"
+    const isChampions = seasonInfo.type === "champions" || seasonInfo.type === "triplete-champions";
+    const isTriplete = seasonInfo.type === "triplete-italia" || seasonInfo.type === "triplete-champions";
+    const cup = isChampions
       ? simulateChampions(seasonInfo.playedSeason, entry, squad)
       : simulateCup(seasonInfo.playedSeason, entry, squad);
+    if (isTriplete) {
+      cup.triplete = seasonInfo.type === "triplete-italia" ? "italia" : "champions";
+      // memorizza i dati per proseguire e l'esito
+      setTripleteState(prev => {
+        const base = prev || { strength: seasonInfo.strength, playedSeason: seasonInfo.playedSeason, realPos: seasonInfo.realPos, italia: null, champions: null };
+        if (seasonInfo.type === "triplete-italia") return { ...base, italia: cup.reached };
+        return { ...base, champions: cup.reached };
+      });
+    }
     setCupResult(cup);
     setPhase("cuplive");
   }, [teamMode, chosenTeam, squad]);
+
+  // ---- TRIPLETE: dopo la Coppa Italia, prosegui con la Coppa Campioni ----
+  const goToChampionsTriplete = useCallback(() => {
+    if (!tripleteState) return;
+    goToCup({ strength: tripleteState.strength, playedSeason: tripleteState.playedSeason,
+      realPos: tripleteState.realPos, type: "triplete-champions" });
+  }, [tripleteState, goToCup]);
 
   // ============ RENDER ============
   if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,careerMode,setCareerMode,teamMode,setTeamMode,chosenTeam,setChosenTeam,cupMode,setCupMode,startGame}} />;
@@ -2879,7 +2944,7 @@ export default function App() {
   if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, careerMode, careerYear, cupMode, onGoCup:goToCup, onRestart:()=>setPhase("setup"), onAdvance:advanceCareer}} />;
   if (phase === "market") return <Market {...{squad, formation, usedIds, forcedSeason, careerYear, careerEvo, difficulty, teamClub: teamMode ? chosenTeam : null, onConfirm:finishMarket}} />;
   if (phase === "cuplive") return <CupLive {...{cup:cupResult, onDone:()=>setPhase("cup")}} />;
-  if (phase === "cup") return <CupBracket {...{cup:cupResult, onBack:()=>setPhase("result"), onRestart:()=>setPhase("setup")}} />;
+  if (phase === "cup") return <CupBracket {...{cup:cupResult, tripleteState, onNextTriplete:goToChampionsTriplete, onBack:()=>setPhase("result"), onRestart:()=>{setTripleteState(null); setPhase("setup");}}} />;
 
   return (
     <Draft {...{formation, squad, round, filledCount, spin, spinning, doSpin, reroll, rerolls,
