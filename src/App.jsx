@@ -327,8 +327,6 @@ function cupGoals(myT, oppT, home, rng) {
 
 // ordine "a serpentina" delle posizioni di seed in un bracket a 16, così seed 1 e 2
 // si incontrano solo in finale, 1-4 in semifinale, ecc.
-const BRACKET16 = [1,16,8,9,5,12,4,13,3,14,6,11,7,10,2,15];
-
 function simulateCup(season, myEntry, squad = null) {
   // Coppa Italia: 16 = la mia + le 15 avversarie più forti della stagione
   const rng0 = mulberry32(((myEntry.seedHash || 12345) ^ 0xc0ffee) >>> 0);
@@ -350,9 +348,35 @@ function runCupBracket({ season, teams16, squad = null, seedHash = 12345, oppRos
   // seeding per forza: 1 = più forte
   teams.sort((a,b)=>b.str-a.str);
   const seeded = teams.map((t,i)=>({ ...t, seed: i+1 }));
-  // posiziono nel bracket secondo BRACKET16
-  const bySeed = {}; seeded.forEach(t=>bySeed[t.seed]=t);
-  let bracket = BRACKET16.map(s => bySeed[s]);
+
+  // SORTEGGIO stile Champions: 4 fasce da 4 (per forza). Dentro ogni fascia l'ordine è
+  // mescolato, così gli accoppiamenti cambiano a ogni torneo (le teste di serie restano
+  // comunque protette e si incontrano tardi). Prima era deterministico -> stesso 1° avversario.
+  const shuffle = (arr) => {
+    const a = [...arr];
+    for (let i=a.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+    return a;
+  };
+  const pot1 = shuffle(seeded.slice(0,4));
+  const pot2 = shuffle(seeded.slice(4,8));
+  const pot3 = shuffle(seeded.slice(8,12));
+  const pot4 = shuffle(seeded.slice(12,16));
+  // ogni "spicchio" del tabellone prende una testa (pot1), una da pot2/3/4, in ordine casuale
+  // BRACKET16 alterna le fasce: [p1,p4,p3,p2] x4 slot, così una testa non becca mai un'altra testa al 1° turno
+  const bracket = [];
+  for (let i=0;i<4;i++) { bracket.push(pot1[i], pot4[i], pot3[i], pot2[i]); }
+  // riordino gli 8 accoppiamenti in modo che le teste (pot1) siano distribuite nel tabellone
+  // e si possano incontrare solo dalle semifinali in poi
+  const ordered = [
+    bracket[0], bracket[1],   // p1[0] vs p4[0]
+    bracket[6], bracket[7],   // p1[1] vs p4[1] ... distribuite
+    bracket[10], bracket[11],
+    bracket[12], bracket[13],
+    bracket[2], bracket[3],
+    bracket[4], bracket[5],
+    bracket[8], bracket[9],
+    bracket[14], bracket[15],
+  ];
 
   const oppToT = (s) => Math.max(0, Math.min(1, (s - 72) / 13));
   const myT = Math.max(0, Math.min(1, (me.str - 72) / 20)); // la mia forza usa scala "tua"
@@ -455,7 +479,7 @@ function runCupBracket({ season, teams16, squad = null, seedHash = 12345, oppRos
   };
 
   // OTTAVI (secca) -> QUARTI (a/r) -> SEMI (a/r) -> FINALE (secca)
-  const r16 = playRound(bracket, "single");
+  const r16 = playRound(ordered, "single");
   const qfTeams = r16.map(m=>m.winner);
   const qf = playRound(qfTeams, "two");
   const sfTeams = qf.map(m=>m.winner);
@@ -541,7 +565,6 @@ function runCupBracket({ season, teams16, squad = null, seedHash = 12345, oppRos
 // ---- Coppa Campioni: costruisce le 16 e lancia il torneo ----
 // 16 = la tua + 3 top italiane della stagione + 12 europee (le più forti del file).
 function simulateChampions(season, myEntry, squad = null) {
-  const rng = mulberry32(((myEntry.seedHash || 777) ^ 0x1abe11) >>> 0);
   const me = { club: myEntry.club || "LA TUA SQUADRA", str: myEntry.str, me: true };
   // 3 top italiane della stagione (avversarie più forti in Serie A)
   const ita = opponentsForSeason(season, myEntry.excludeClub || null).slice(0, 3)
@@ -2931,13 +2954,17 @@ export default function App() {
   // ---- COPPE: calcola il torneo e mostra il bracket (gestisce anche il Triplete) ----
   const goToCup = useCallback((seasonInfo) => {
     // seasonInfo: { strength, playedSeason, realPos, type }
+    const isChampions = seasonInfo.type === "champions" || seasonInfo.type === "triplete-champions";
+    // SEED davvero casuale a ogni partita (prima era deterministico -> stesso tabellone/punteggio
+    // ogni volta, e identico tra Coppa Italia e Champions nel triplete). Aggiungo un salt
+    // casuale + un discriminante per tipo di coppa.
+    const salt = (Math.floor(Math.random() * 0x7fffffff) ^ (isChampions ? 0xC4A3 : 0x17A1)) >>> 0;
     const entry = {
       str: seasonInfo.strength,
       club: teamMode ? chosenTeam : effectiveTeamName,
       excludeClub: teamMode ? chosenTeam : null,
-      seedHash: Math.floor(seasonInfo.strength * 1000) ^ (seasonInfo.playedSeason.charCodeAt(0) * 31),
+      seedHash: (Math.floor(seasonInfo.strength * 1000) ^ (seasonInfo.playedSeason.charCodeAt(0) * 31) ^ salt) >>> 0,
     };
-    const isChampions = seasonInfo.type === "champions" || seasonInfo.type === "triplete-champions";
     const isTriplete = seasonInfo.type === "triplete-italia" || seasonInfo.type === "triplete-champions";
     const cup = isChampions
       ? simulateChampions(seasonInfo.playedSeason, entry, squad)
