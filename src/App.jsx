@@ -118,6 +118,91 @@ const TEAM_LIST = (() => {
 // rinforzare la squadra, ma NON vengono mai simulate come campionato giocato.
 const INCOMPLETE_SEASONS = ["2004-05", "2005-06"];
 
+// ================== SFIDA DEL GIORNO ==================
+// Seed giornaliero basato sulla data reale (si azzera a mezzanotte).
+// Stesso seed = stessa squadra + stessi obiettivi per tutti gli utenti quel giorno.
+function getDailyDateKey() {
+  const now = new Date();
+  // offset Italia: UTC+1/+2 → usiamo UTC+1 fisso per semplicità (basta che sia coerente)
+  const d = new Date(now.getTime() + 60 * 60 * 1000); // +1h
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+}
+function getDailySeed() {
+  const key = getDailyDateKey();
+  let h = 0;
+  for (let i = 0; i < key.length; i++) { h = (Math.imul(31, h) + key.charCodeAt(i)) >>> 0; }
+  return h;
+}
+// Ciclo: giorno 0→obiettivo Scudetto, giorno 1→Coppa Campioni, giorno 2→Triplete
+// (il cycle ruota su 3 valori in base al numero del giorno dell'anno)
+function getDailyCycleDay() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), 0, 0);
+  const diff = now - start;
+  const dayOfYear = Math.floor(diff / 86400000);
+  return dayOfYear % 3;
+}
+const DAILY_OBJECTIVES = [
+  { key: "scudetto",  label: "Scudetto",        emoji: "🏆", desc: "Vinci il campionato (1° in Serie A)" },
+  { key: "champions", label: "Coppa Campioni",   emoji: "⭐", desc: "Vinci la Coppa Campioni" },
+  { key: "triplete",  label: "Triplete",          emoji: "👑", desc: "Vinci scudetto + Coppa Italia + Coppa Campioni" },
+];
+// Costruisce la rosa base del club (top-11 per ruolo con formazione 4-3-3)
+// Restituisce null se la rosa non riesce a coprire tutti gli 11 slot
+function buildBaseSquad(club, season, formationSlots) {
+  const roster = PLAYERS.filter(p => p.c === club && p.s === season);
+  const result = new Array(formationSlots.length).fill(null);
+  const used = new Set();
+  // Prima passata: miglior candidato per ruolo esatto
+  formationSlots.forEach((role, i) => {
+    const accepts = SLOT_ACCEPTS[role] || [role];
+    const candidates = roster
+      .filter(p => !used.has(p.pid) && (accepts.some(r => (p.rg && p.rg.length ? p.rg : [p.r]).includes(r) || p.r === r)))
+      .sort((a, b) => b.rt - a.rt);
+    if (candidates.length > 0) {
+      result[i] = { ...candidates[0], slot: role };
+      used.add(candidates[0].pid);
+    }
+  });
+  // Seconda passata: slot ancora vuoti → qualsiasi giocatore non usato (fallback flessibile)
+  formationSlots.forEach((role, i) => {
+    if (result[i]) return;
+    const fallback = roster.filter(p => !used.has(p.pid)).sort((a, b) => b.rt - a.rt);
+    if (fallback.length > 0) {
+      result[i] = { ...fallback[0], slot: role };
+      used.add(fallback[0].pid);
+    }
+  });
+  // Se rimangono slot nulli → rosa incompleta
+  if (result.some(p => p === null)) return null;
+  return result;
+}
+
+// Verifica se un club in una data stagione ha abbastanza giocatori per riempire l'XI
+function hasFullSquad(club, season, formationSlots) {
+  return buildBaseSquad(club, season, formationSlots) !== null;
+}
+
+function getDailyData() {
+  // Formazione fissa 4-3-3 per la sfida del giorno
+  const slots = FORMATIONS["4-3-3"].slots;
+  const seed = getDailySeed();
+  const rng = mulberry32(seed);
+  // Filtra TEAM_LIST tenendo solo club con almeno una stagione con XI completo
+  const validClubs = TEAM_LIST.filter(club =>
+    REAL_SEASONS.some(s => !INCOMPLETE_SEASONS.includes(s) && hasFullSquad(club, s, slots))
+  );
+  const clubIdx = Math.floor(rng() * validClubs.length);
+  const club = validClubs[clubIdx];
+  // obiettivo: basato sul giorno del ciclo
+  const cycleDay = getDailyCycleDay();
+  const objective = DAILY_OBJECTIVES[cycleDay];
+  // Stagione base: la più recente con XI completo per quel club
+  const clubSeasons = ALL_SEASONS.filter(s => hasFullSquad(club, s, slots)).sort().reverse();
+  const baseSeason = clubSeasons[0];
+  return { club, objective, seed, dateKey: getDailyDateKey(), baseSeason };
+}
+
 // ---------------- UTIL ----------------
 const rnd = (n) => Math.floor(Math.random() * n);
 const pick = (arr) => arr[rnd(arr.length)];
@@ -1059,7 +1144,7 @@ function GamesModal({ onClose }) {
 
 function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draftMode, setDraftMode,
                  pickMode, setPickMode, seasonMode, setSeasonMode, chosenSeason, setChosenSeason,
-                 careerMode, setCareerMode, teamMode, setTeamMode, chosenTeam, setChosenTeam, cupMode, setCupMode, teamName, setTeamName, startGame }) {
+                 careerMode, setCareerMode, teamMode, setTeamMode, chosenTeam, setChosenTeam, cupMode, setCupMode, teamName, setTeamName, startGame, onStartDaily }) {
   const [showInfo, setShowInfo] = useState(false);
   const [showGames, setShowGames] = useState(false);
   return (
@@ -1098,6 +1183,8 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
             🎮 Clicca qui per tutti gli altri nostri giochi
           </button>
         </div>
+
+        <DailyChallengeBanner onStart={onStartDaily} />
 
         <Label>Nome della squadra <span style={{color:S.gold, fontSize:10}}>NUOVO</span></Label>
         <input
@@ -1635,13 +1722,28 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, excludeClub = null, teamName = null, careerMode = false, careerYear = 1, cupMode = false, onGoCup, onRestart, onAdvance }) {
+function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, captain = null, superSub = null, excludeClub = null, teamName = null, careerMode = false, careerYear = 1, cupMode = false, externalCupsPlayed = null, ccAlwaysQualified = false, onGoCup, onRestart, onAdvance }) {
   const sim = useMemo(()=>simulate(squad, bonusTotal), [squad, bonusTotal]);
   const meta = useMemo(()=>({ coach, captain, superSub, excludeClub, teamName }), [coach, captain, superSub, excludeClub, teamName]);
   const season = useMemo(()=>simulateSeason(squad, sim, forcedSeason, meta), [squad, sim, forcedSeason, meta]);
   const [showSeason, setShowSeason] = useState(false);
   const [showStandings, setShowStandings] = useState(false);
   const [showGames, setShowGames] = useState(false);
+  // Traccia quali coppe sono già state giocate questa stagione (evita loop).
+  // Se passato dall'esterno (daily challenge), usa quello; altrimenti stato interno.
+  const [internalCupsPlayed, setInternalCupsPlayed] = useState({ italia: false, champions: false });
+  const cupsPlayed = externalCupsPlayed !== null ? externalCupsPlayed : internalCupsPlayed;
+
+  const goItalia = () => {
+    if (cupsPlayed.italia) return;
+    if (!externalCupsPlayed) setInternalCupsPlayed(p => ({ ...p, italia: true }));
+    onGoCup({ strength: sim.strength, playedSeason: season.season, realPos: season.realPos, type: "italia" });
+  };
+  const goChampions = () => {
+    if (cupsPlayed.champions) return;
+    if (!externalCupsPlayed) setInternalCupsPlayed(p => ({ ...p, champions: true }));
+    onGoCup({ strength: sim.strength, playedSeason: season.season, realPos: season.realPos, type: "champions" });
+  };
 
   // ---- CARD IMMAGINE 1080x1350 su canvas, scaricabile (instagrammabile) ----
   const [genState, setGenState] = useState("idle"); // idle | done
@@ -1901,26 +2003,35 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
         {showStandings && <StandingsTable season={season} />}
 
         <div style={{display:"flex", gap:10, justifyContent:"center", marginTop:16, flexWrap:"wrap"}}>
+          {/* COPPE: Coppa Italia sempre, CC solo top 4, una volta ciascuna */}
           {(cupMode === "italia" || cupMode === "triplete") && (
-            <button onClick={()=>onGoCup({ strength: sim.strength, playedSeason: season.season, realPos: season.realPos, type: cupMode === "triplete" ? "triplete-italia" : "italia" })}
-              style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
-              {cupMode === "triplete" ? "👑 INIZIA IL TRIPLETE — COPPA ITALIA" : "🏆 VAI ALLA COPPA ITALIA"}
-            </button>
+            cupsPlayed.italia
+              ? <div style={{...bigBtnSm, background:"rgba(0,0,0,.2)", color:hexA(S.cream,0.4), width:"100%",
+                  textAlign:"center", cursor:"default", border:`1px solid ${hexA(S.cream,0.15)}`}}>
+                  🏆 Coppa Italia già giocata
+                </div>
+              : <button onClick={goItalia}
+                  style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
+                  🏆 VAI ALLA COPPA ITALIA
+                </button>
           )}
-          {cupMode === "champions" && (() => {
-            // qualificazione: almeno 4° in Serie A, OPPURE stagione singola (non carriera)
-            const qualified = !careerMode || season.realPos <= 4;
-            return qualified ? (
-              <button onClick={()=>onGoCup({ strength: sim.strength, playedSeason: season.season, type: "champions" })}
-                style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
-                ⭐ VAI ALLA COPPA CAMPIONI
-              </button>
-            ) : (
+          {(cupMode === "champions" || cupMode === "triplete") && (() => {
+            const qualified = ccAlwaysQualified || !careerMode || season.realPos <= 4;
+            if (!qualified) return (
               <div style={{...bigBtnSm, background:"rgba(0,0,0,.25)", color:hexA(S.cream,0.7), width:"100%",
                 textAlign:"center", cursor:"default", border:`1px solid ${hexA(S.cream,0.2)}`}}>
                 ⭐ Coppa Campioni — non qualificato ({ordinaleShort(season.realPos)} posto, serve almeno 4°)
               </div>
             );
+            return cupsPlayed.champions
+              ? <div style={{...bigBtnSm, background:"rgba(0,0,0,.2)", color:hexA(S.cream,0.4), width:"100%",
+                  textAlign:"center", cursor:"default", border:`1px solid ${hexA(S.cream,0.15)}`}}>
+                  ⭐ Coppa Campioni già giocata
+                </div>
+              : <button onClick={goChampions}
+                  style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
+                  ⭐ VAI ALLA COPPA CAMPIONI
+                </button>;
           })()}
           <button onClick={()=>{setShowSeason(s=>!s); setShowStandings(false);}} style={bigBtnSm}>
             {showSeason ? "👥 Vedi la rosa" : "📅 Calendario"}
@@ -2159,7 +2270,7 @@ function weakestIdx(squad) {
   return idx;
 }
 
-function BonusSelect({ squad, formation, usedIds, teamClub = null, onConfirm }) {
+function BonusSelect({ squad, formation, usedIds, teamClub = null, hideSuperSub = false, onConfirm }) {
   const filled = squad.filter(Boolean);
   // CAPITANO
   const [captainPid, setCaptainPid] = useState(null);
@@ -2180,14 +2291,14 @@ function BonusSelect({ squad, formation, usedIds, teamClub = null, onConfirm }) 
     setSubSpinning(true); setSubPlayer(null);
     let attempt = 0, found = null;
     while (attempt < 400 && !found) {
-      const club = teamClub || pick(CLUBS), season = pick(SEASONS);
+      const club = teamClub || pick(CLUBS), season = pick(REAL_SEASONS);
       const pool = PLAYERS.filter(p => p.c===club && p.s===season &&
         !usedIds.has(p.pid) && eligibleFor(p, weakRole) && p.rt > weakPlayer.rt);
       if (pool.length > 0) found = { club, season, candidates: pool.sort((a,b)=>b.rt-a.rt).slice(0,6) };
       attempt++;
     }
     if (!found) {
-      const pool = PLAYERS.filter(p => !usedIds.has(p.pid) && eligibleFor(p, weakRole) && p.rt > weakPlayer.rt && (teamClub ? p.c===teamClub : true));
+      const pool = PLAYERS.filter(p => !usedIds.has(p.pid) && eligibleFor(p, weakRole) && p.rt > weakPlayer.rt && p.s !== "Legends" && (teamClub ? p.c===teamClub : true));
       if (pool.length) {
         const p0 = pick(pool);
         const cand = PLAYERS.filter(p => p.c===p0.c && p.s===p0.s && !usedIds.has(p.pid) && eligibleFor(p,weakRole) && p.rt>weakPlayer.rt);
@@ -2204,12 +2315,12 @@ function BonusSelect({ squad, formation, usedIds, teamClub = null, onConfirm }) 
   const coachB = coach ? coach.bonus : 0;
   // Super Sub: il delta di rating del sostituto migliora la media -> lo traduciamo in bonus forza
   const subB = subPlayer ? Math.min(1.0, (subPlayer.rt - weakPlayer.rt) * 0.12) : 0;
-  const bonusTotal = Math.round((capB + coachB + subB) * 100) / 100;
+  const bonusTotal = Math.round((capB + coachB + (hideSuperSub ? 0 : subB)) * 100) / 100;
 
   const confirm = () => {
     let finalSquad = squad;
     let superSub = null;
-    if (subPlayer && weakIdx >= 0) {
+    if (!hideSuperSub && subPlayer && weakIdx >= 0) {
       finalSquad = [...squad];
       finalSquad[weakIdx] = { ...subPlayer, slot: weakRole, isSuperSub: true };
       superSub = { ...subPlayer, slot: weakRole };
@@ -2274,6 +2385,7 @@ function BonusSelect({ squad, formation, usedIds, teamClub = null, onConfirm }) 
         </div>
 
         {/* SUPER SUB */}
+        {!hideSuperSub && (
         <div style={{...panel, marginTop:14}}>
           <div style={sectionTitle}>🔁 Super Sub</div>
           {weakPlayer ? (<>
@@ -2312,6 +2424,7 @@ function BonusSelect({ squad, formation, usedIds, teamClub = null, onConfirm }) 
             <div style={sectionSub}>Rosa incompleta.</div>
           )}
         </div>
+        )}
 
         {/* RIEPILOGO + AVVIA */}
         <div style={{...panel, marginTop:14, textAlign:"center"}}>
@@ -2325,8 +2438,8 @@ function BonusSelect({ squad, formation, usedIds, teamClub = null, onConfirm }) 
 }
 
 // ================== ONDATA 4: MERCATO + EVOLUZIONE (fine stagione carriera) ==================
-function Market({ squad, formation, usedIds, forcedSeason, careerYear, careerEvo, difficulty = "normal", teamClub = null, onConfirm }) {
-  const MAX_SUBS = 3;
+function Market({ squad, formation, usedIds, forcedSeason, careerYear, careerEvo, difficulty = "normal", teamClub = null, isPreSeason = false, maxSubs = null, alwaysImproving = false, onConfirm }) {
+  const MAX_SUBS = maxSubs !== null ? maxSubs : 3;
   const BASE_REROLLS = DIFFICULTY[difficulty]?.rerolls ?? 0; // rigirate per sostituzione = reroll della modalità
   const [roster, setRoster] = useState(squad);
   const [ids, setIds] = useState(()=>{ const s=new Set(); squad.forEach(p=>p&&s.add(p.pid)); return s; });
@@ -2341,23 +2454,25 @@ function Market({ squad, formation, usedIds, forcedSeason, careerYear, careerEvo
 
   const doSpin = useCallback((slotIdx) => {
     const slotRole = formation.slots[slotIdx];
+    const currentRt = roster[slotIdx]?.rt ?? 0;
+    const rtFilter = alwaysImproving ? (p) => p.rt > currentRt : () => true;
     setSpinning(true); setSpin(null);
     let attempt = 0, found = null;
     while (attempt < 400 && !found) {
       const club = teamClub || pick(CLUBS), season = pick(seasonPool);
-      const pool = PLAYERS.filter(p => p.c===club && p.s===season && !ids.has(p.pid) && eligibleFor(p, slotRole));
+      const pool = PLAYERS.filter(p => p.c===club && p.s===season && !ids.has(p.pid) && eligibleFor(p, slotRole) && rtFilter(p));
       if (pool.length) found = { club, season, candidates: pool.sort((a,b)=>b.rt-a.rt).slice(0,6) };
       attempt++;
     }
     if (!found) {
-      const pool = PLAYERS.filter(p => !ids.has(p.pid) && eligibleFor(p, slotRole) && (teamClub ? p.c===teamClub : (!forcedSeason || p.s===forcedSeason)));
+      const pool = PLAYERS.filter(p => !ids.has(p.pid) && eligibleFor(p, slotRole) && rtFilter(p) && (teamClub ? p.c===teamClub : (!forcedSeason || p.s===forcedSeason)));
       if (pool.length) { const p0=pick(pool);
-        const cand = PLAYERS.filter(p=>p.c===p0.c && p.s===p0.s && !ids.has(p.pid) && eligibleFor(p,slotRole));
+        const cand = PLAYERS.filter(p=>p.c===p0.c && p.s===p0.s && !ids.has(p.pid) && eligibleFor(p,slotRole) && rtFilter(p));
         found = { club:p0.c, season:p0.s, candidates:cand.sort((a,b)=>b.rt-a.rt).slice(0,6) };
       }
     }
     setTimeout(()=>{ setSpin(found); setSpinning(false); }, 900);
-  }, [formation, ids, seasonPool, forcedSeason, teamClub]);
+  }, [formation, ids, roster, seasonPool, forcedSeason, teamClub, alwaysImproving]);
 
   const startSub = (slotIdx) => { if (subsLeft<=0) return; setTargetIdx(slotIdx); setRerollsLeft(BASE_REROLLS); doSpin(slotIdx); };
   const confirmSub = (player) => {
@@ -2374,8 +2489,14 @@ function Market({ squad, formation, usedIds, forcedSeason, careerYear, careerEvo
       <Header small />
       <div style={{maxWidth:680, margin:"0 auto", padding:"0 16px"}}>
         <div style={{...panel, textAlign:"center"}}>
-          <div style={{fontSize:13, fontWeight:900, letterSpacing:1.5, color:S.gold}}>🗓️ FINE STAGIONE {careerYear}</div>
-          <div style={{color:S.cream, opacity:.7, fontSize:14, marginTop:6}}>I tuoi giocatori sono cresciuti o invecchiati. Puoi sostituirne fino a <b style={{color:S.gold}}>{MAX_SUBS}</b>.</div>
+          <div style={{fontSize:13, fontWeight:900, letterSpacing:1.5, color:S.gold}}>
+            {isPreSeason ? `🗓️ PREPARAZIONE STAGIONE ${careerYear}` : `🗓️ FINE STAGIONE ${careerYear}`}
+          </div>
+          <div style={{color:S.cream, opacity:.7, fontSize:14, marginTop:6}}>
+            {isPreSeason
+              ? <>Rosa base pronta. Puoi sostituire fino a <b style={{color:S.gold}}>{MAX_SUBS}</b> giocatori prima di iniziare.</>
+              : <>I tuoi giocatori sono cresciuti o invecchiati. Puoi sostituirne fino a <b style={{color:S.gold}}>{MAX_SUBS}</b>.</>}
+          </div>
         </div>
 
         {careerEvo && careerEvo.length>0 && (
@@ -2442,7 +2563,9 @@ function Market({ squad, formation, usedIds, forcedSeason, careerYear, careerEvo
           </div>
         )}
 
-        <button onClick={()=>onConfirm(roster, ids)} style={{...bigBtn, marginTop:16}}>▶ AVANTI ALLA STAGIONE {careerYear+1}</button>
+        <button onClick={()=>onConfirm(roster, ids)} style={{...bigBtn, marginTop:16}}>
+          {isPreSeason ? `▶ INIZIA LA STAGIONE ${careerYear}` : `▶ AVANTI ALLA STAGIONE ${careerYear+1}`}
+        </button>
       </div>
     </div>
   );
@@ -2595,7 +2718,7 @@ function CupLive({ cup, onDone }) {
 }
 
 // ================== COPPA ITALIA: tabellone visivo (bracket) ==================
-function CupBracket({ cup, onBack, onRestart, tripleteState = null, onNextTriplete = null }) {
+function CupBracket({ cup, onBack, onRestart, onNextSeason = null, onGoChampions = null, tripleteState = null, onNextTriplete = null }) {
   if (!cup) return null;
   const { season, rounds, champion, reached } = cup;
   const meWon = champion.me;
@@ -2696,21 +2819,20 @@ function CupBracket({ cup, onBack, onRestart, tripleteState = null, onNextTriple
         </div>
 
         <div style={{display:"flex", gap:10, justifyContent:"center", marginTop:20, flexWrap:"wrap"}}>
-          {isTripleteItalia && onNextTriplete && (() => {
-            const qualified = tripleteState && tripleteState.realPos <= 4;
-            return qualified ? (
-              <button onClick={onNextTriplete} style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
-                ⭐ PROSEGUI IL TRIPLETE — COPPA CAMPIONI
-              </button>
-            ) : (
-              <div style={{...bigBtnSm, background:"rgba(0,0,0,.25)", color:hexA(S.cream,0.7), width:"100%",
-                textAlign:"center", cursor:"default", border:`1px solid ${hexA(S.cream,0.2)}`}}>
-                Triplete interrotto: non qualificato alla Coppa Campioni (servirebbe almeno 4° in campionato)
-              </div>
-            );
-          })()}
+          {/* Coppa Campioni dopo la Coppa Italia (se disponibile) */}
+          {onGoChampions && (
+            <button onClick={onGoChampions} style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900, width:"100%"}}>
+              ⭐ VAI ALLA COPPA CAMPIONI
+            </button>
+          )}
+          {/* Prossima stagione direttamente dal bracket (se disponibile) */}
+          {onNextSeason && (
+            <button onClick={onNextSeason} style={{...bigBtnSm, background: onGoChampions ? "transparent" : S.gold, color: onGoChampions ? S.gold : S.ink, fontWeight:900, width:"100%", border: onGoChampions ? `2px solid ${S.gold}` : "none"}}>
+              ▶ PROSSIMA STAGIONE
+            </button>
+          )}
           <button onClick={onBack} style={{...bigBtnSm, background:"transparent", border:`2px solid ${S.gold}`, color:S.gold}}>
-            ↩ Torna al campionato
+            ↩ Torna alla panoramica
           </button>
           <button onClick={onRestart} style={{...bigBtnSm, background:S.gold, color:S.ink, fontWeight:900}}>
             ↻ Nuova partita
@@ -2721,8 +2843,345 @@ function CupBracket({ cup, onBack, onRestart, tripleteState = null, onNextTriple
   );
 }
 
+// ================== SFIDA DEL GIORNO: banner nella schermata Setup ==================
+function DailyChallengeBanner({ onStart }) {
+  const { club, objective, dateKey } = getDailyData();
+  return (
+    <div style={{
+      background: `linear-gradient(135deg, rgba(255,210,74,.18) 0%, rgba(0,0,0,.3) 100%)`,
+      border: `2px solid ${S.gold}`,
+      borderRadius: 16, padding: "18px 20px", marginBottom: 20,
+      cursor: "pointer", position: "relative", overflow: "hidden",
+    }} onClick={onStart}>
+      <div style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0,
+        background: "radial-gradient(ellipse at top right, rgba(255,210,74,.08), transparent 60%)", pointerEvents: "none" }}/>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <span style={{ fontSize: 22 }}>📅</span>
+        <div>
+          <div style={{ color: S.gold, fontWeight: 900, fontSize: 13, letterSpacing: 2, textTransform: "uppercase" }}>
+            Sfida del Giorno
+          </div>
+          <div style={{ color: S.cream, opacity: .55, fontSize: 11 }}>{dateKey}</div>
+        </div>
+        <div style={{ marginLeft: "auto", background: S.gold, color: S.ink, fontWeight: 900,
+          fontSize: 12, borderRadius: 20, padding: "5px 14px", letterSpacing: 1 }}>
+          GIOCA
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ background: "rgba(0,0,0,.3)", borderRadius: 10, padding: "8px 14px", textAlign: "center" }}>
+          <div style={{ color: S.cream, opacity: .6, fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>Squadra</div>
+          <div style={{ color: S.gold, fontWeight: 900, fontSize: 16, marginTop: 2 }}>{club}</div>
+        </div>
+        <div style={{ fontSize: 22 }}>→</div>
+        <div style={{ background: "rgba(0,0,0,.3)", borderRadius: 10, padding: "8px 14px", textAlign: "center", flex: 1 }}>
+          <div style={{ color: S.cream, opacity: .6, fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>Obiettivo</div>
+          <div style={{ color: S.gold, fontWeight: 900, fontSize: 16, marginTop: 2 }}>
+            {objective.emoji} {objective.label}
+          </div>
+          <div style={{ color: S.cream, opacity: .55, fontSize: 11, marginTop: 2 }}>{objective.desc}</div>
+        </div>
+      </div>
+      <div style={{ marginTop: 10, color: S.cream, opacity: .5, fontSize: 11 }}>
+        3 stagioni · campionato + Coppa Italia + CC · 3 cambi/stagione · rating evolvono
+      </div>
+    </div>
+  );
+}
+
+// ================== SFIDA DEL GIORNO: schermata principale ==================
+function DailyChallengeScreen({ onBack }) {
+  const FORMATION_KEY = "4-3-3";
+  const formation = FORMATIONS[FORMATION_KEY];
+  const { club, objective, seed, baseSeason } = getDailyData();
+
+  const [dailyMode, setDailyMode] = useState(null); // null | "realistica" | "semplice"
+  const [phase, setPhase] = useState("intro");
+  const [year, setYear] = useState(1);
+  const [squad, setSquad] = useState(() => buildBaseSquad(club, baseSeason, formation.slots));
+  const [usedIds, setUsedIds] = useState(() => {
+    const s = new Set(); buildBaseSquad(club, baseSeason, formation.slots).forEach(p => p && s.add(p.pid)); return s;
+  });
+  const [careerEvo, setCareerEvo] = useState(null);
+  const [bonusTotal, setBonusTotal] = useState(0);
+  const [coach, setCoach] = useState(null);
+  const [captain, setCaptain] = useState(null);
+  const [superSub, setSuperSub] = useState(null);
+  const [cupResult, setCupResult] = useState(null);
+  const [lastRealPos, setLastRealPos] = useState(null);
+  const [cupsPlayed, setCupsPlayed] = useState({ italia: false, champions: false });
+  const [seasonPerfRef, setSeasonPerfRef] = useState(0);
+  const [achieved, setAchieved] = useState({ scudetto: false, champions: false, coppaItalia: false });
+  const [seasonResults, setSeasonResults] = useState([]);
+
+  const isSimple = dailyMode === "semplice";
+  const dailyMaxSubs = isSimple ? 5 : 3;
+
+  const updateAchieved = useCallback((realPos, champReached, italiaReached) => {
+    setAchieved(prev => ({
+      scudetto: prev.scudetto || realPos === 1,
+      champions: prev.champions || champReached === "Vittoria",
+      coppaItalia: prev.coppaItalia || italiaReached === "Vittoria",
+    }));
+    setSeasonResults(prev => [...prev, { year, realPos, championsReached: champReached, italiaReached }]);
+  }, [year]);
+
+  const advanceToMarket = useCallback((perf) => {
+    const evSeed = (year * 2654435761 ^ seed) >>> 0;
+    const evolved = evolveSquad(squad, perf, evSeed);
+    setCareerEvo(evolved.map(p => p ? {
+      n: p.n, slot: p.slot, oldRt: p.rt - (p._evo?.delta || 0), newRt: p.rt, age: p.age, delta: p._evo?.delta || 0
+    } : null).filter(Boolean));
+    setSquad(evolved);
+    const ids = new Set(); evolved.forEach(p => p && ids.add(p.pid));
+    setUsedIds(ids);
+    setPhase("market");
+  }, [squad, year, seed]);
+
+  const finishMarket = useCallback((newSquad, newIds, isPreSeason) => {
+    setSquad(newSquad); setUsedIds(newIds);
+    if (!isPreSeason) setYear(y => y + 1);
+    setBonusTotal(0); setCoach(null); setCaptain(null); setSuperSub(null);
+    setCupsPlayed({ italia: false, champions: false });
+    setPhase("bonus");
+  }, []);
+
+  const onNextSeason = useCallback((perf) => {
+    if (year >= 3) {
+      setPhase("recap");
+    } else {
+      advanceToMarket(perf ?? seasonPerfRef);
+    }
+  }, [year, advanceToMarket, seasonPerfRef]);
+
+  const goToCup = useCallback((seasonInfo) => {
+    const isChampions = seasonInfo.type === "champions" || seasonInfo.type === "triplete-champions";
+    setCupsPlayed(p => isChampions ? { ...p, champions: true } : { ...p, italia: true });
+    setLastSeasonInfo({ strength: seasonInfo.strength, playedSeason: seasonInfo.playedSeason, realPos: seasonInfo.realPos });
+    const salt = (Math.floor(Math.random() * 0x7fffffff) ^ (isChampions ? 0xC4A3 : 0x17A1) ^ seed) >>> 0;
+    const entry = {
+      str: seasonInfo.strength,
+      club: club,
+      excludeClub: club,
+      seedHash: (Math.floor(seasonInfo.strength * 1000) ^ salt) >>> 0,
+    };
+    const cup = isChampions
+      ? simulateChampions(seasonInfo.playedSeason, entry, squad)
+      : simulateCup(seasonInfo.playedSeason, entry, squad);
+    if (isChampions) {
+      updateAchieved(seasonInfo.realPos, cup.reached, null);
+    } else {
+      updateAchieved(seasonInfo.realPos, null, cup.reached);
+    }
+    setCupResult(cup);
+    setPhase("cuplive");
+  }, [club, squad, seed, updateAchieved]);
+
+  const [lastSeasonInfo, setLastSeasonInfo] = useState(null); // {strength, playedSeason, realPos}
+
+  const onCupDone = useCallback(() => { setPhase("cup"); }, []);
+  const onCupBack = useCallback(() => { setPhase("result"); }, []);
+
+  if (phase === "intro") {
+    return (
+      <div style={wrap}>
+        <Header small />
+        <div style={{ maxWidth: 520, margin: "0 auto", padding: "0 20px" }}>
+          <div style={{ ...panel, borderColor: S.gold, textAlign: "center", marginBottom: 16 }}>
+            <div style={{ fontSize: 40 }}>📅</div>
+            <div style={{ color: S.gold, fontSize: 22, fontWeight: 900, letterSpacing: 1, marginTop: 8 }}>
+              SFIDA DEL GIORNO
+            </div>
+            <div style={{ color: S.cream, opacity: .6, fontSize: 12, marginTop: 4 }}>{getDailyDateKey()}</div>
+            <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ background: "rgba(0,0,0,.25)", borderRadius: 12, padding: "12px 16px" }}>
+                <div style={{ color: S.cream, opacity: .55, fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase" }}>La tua squadra</div>
+                <div style={{ color: S.gold, fontSize: 24, fontWeight: 900, marginTop: 4 }}>{club}</div>
+                <div style={{ color: S.cream, opacity: .55, fontSize: 12, marginTop: 2 }}>Rosa base: stagione {baseSeason}</div>
+              </div>
+              <div style={{ background: "rgba(0,0,0,.25)", borderRadius: 12, padding: "12px 16px" }}>
+                <div style={{ color: S.cream, opacity: .55, fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase" }}>Obiettivo</div>
+                <div style={{ color: S.gold, fontSize: 20, fontWeight: 900, marginTop: 4 }}>
+                  {objective.emoji} {objective.label}
+                </div>
+                <div style={{ color: S.cream, opacity: .75, fontSize: 13, marginTop: 4 }}>{objective.desc}</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ ...panel, marginBottom: 16 }}>
+            <div style={{ color: S.gold, fontSize: 13, fontWeight: 900, letterSpacing: 1.5, marginBottom: 12 }}>SCEGLI LA MODALITÀ</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div onClick={() => setDailyMode("realistica")}
+                style={{ ...chip(dailyMode === "realistica"), padding: "12px 16px", cursor: "pointer" }}>
+                <div style={{ fontWeight: 900, fontSize: 15 }}>⚽ Realistica</div>
+                <div style={{ fontSize: 12, opacity: .7, marginTop: 4 }}>
+                  3 cambi a stagione · ruota casuale · Coppa Campioni solo se arrivi tra le prime 4 · rating evolvono
+                </div>
+              </div>
+              <div onClick={() => setDailyMode("semplice")}
+                style={{ ...chip(dailyMode === "semplice"), padding: "12px 16px", cursor: "pointer" }}>
+                <div style={{ fontWeight: 900, fontSize: 15 }}>🌟 Semplice</div>
+                <div style={{ fontSize: 12, opacity: .7, marginTop: 4 }}>
+                  5 cambi a stagione · ogni cambio è sempre migliorativo · Coppa Campioni sempre disponibile
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => { if (dailyMode) setPhase("market"); }}
+            style={{ ...bigBtn, opacity: dailyMode ? 1 : 0.4, cursor: dailyMode ? "pointer" : "not-allowed" }}>
+            ⚽ INIZIA — SCEGLI I CAMBI
+          </button>
+          <button onClick={onBack} style={{ ...bigBtn, marginTop: 10, background: "transparent", border: `2px solid ${hexA(S.gold, .5)}`, color: S.gold }}>
+            ← Torna al menu
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "market") {
+    const isPreSeason = year === 1 && !careerEvo;
+    return <Market squad={squad} formation={formation} usedIds={usedIds}
+      forcedSeason={null} careerYear={year} careerEvo={isPreSeason ? null : careerEvo}
+      difficulty="normal" teamClub={null}
+      isPreSeason={isPreSeason}
+      maxSubs={dailyMaxSubs}
+      alwaysImproving={isSimple}
+      onConfirm={(newSquad, newIds) => finishMarket(newSquad, newIds, isPreSeason)} />;
+  }
+
+  if (phase === "bonus") {
+    return <BonusSelect squad={squad} formation={formation} usedIds={usedIds} teamClub={club}
+      hideSuperSub={true}
+      onConfirm={({ bonusTotal: bt, coach: co, captain: ca, superSub: ss, finalSquad: fs }) => {
+        setSquad(fs);
+        if (fs !== squad) { const s = new Set(usedIds); fs.forEach(p => p && s.add(p.pid)); setUsedIds(s); }
+        setBonusTotal(bt); setCoach(co); setCaptain(ca); setSuperSub(ss);
+        setPhase("season");
+      }} />;
+  }
+
+  if (phase === "season") {
+    return <SeasonLive squad={squad} formation={formation} forcedSeason={null}
+      bonusTotal={bonusTotal} coach={coach} captain={captain} superSub={superSub}
+      excludeClub={club} teamName={club} onDone={() => setPhase("result")} />;
+  }
+
+  if (phase === "result") {
+    const ccQualified = isSimple || (lastRealPos !== null ? lastRealPos <= 4 : true);
+    return <Result squad={squad} formation={formation} forcedSeason={null}
+      bonusTotal={bonusTotal} coach={coach} captain={captain} superSub={superSub}
+      excludeClub={club} teamName={club}
+      careerMode={true} careerYear={year}
+      cupMode="triplete"
+      ccAlwaysQualified={isSimple}
+      externalCupsPlayed={cupsPlayed}
+      onGoCup={(seasonInfo) => {
+        if (seasonInfo.realPos !== undefined) setLastRealPos(seasonInfo.realPos);
+        setSeasonPerfRef(0);
+        goToCup(seasonInfo);
+      }}
+      onRestart={onBack}
+      onAdvance={(perf) => {
+        setSeasonPerfRef(perf);
+        onNextSeason(perf);
+      }} />;
+  }
+
+  if (phase === "cuplive") {
+    return <CupLive cup={cupResult} onDone={onCupDone} />;
+  }
+
+  if (phase === "cup") {
+    const justPlayedItalia = cupResult && cupResult.title !== "Coppa Campioni";
+    const ccNotPlayed = !cupsPlayed.champions;
+    const ccQualifiedNow = isSimple || (lastRealPos !== null ? lastRealPos <= 4 : true);
+    const showGoChampions = justPlayedItalia && ccNotPlayed && ccQualifiedNow;
+    return <CupBracket cup={cupResult}
+      onGoChampions={showGoChampions ? () => goToCup({
+        strength: lastSeasonInfo?.strength ?? 0,
+        playedSeason: lastSeasonInfo?.playedSeason ?? cupResult.season,
+        realPos: lastRealPos,
+        type: "champions",
+      }) : null}
+      onNextSeason={() => onNextSeason(seasonPerfRef)}
+      onBack={onCupBack}
+      onRestart={onBack} />;
+  }
+
+  if (phase === "recap") {
+    const obj = objective;
+    const scudettoYears = seasonResults.filter(r => r.realPos === 1).map(r => r.year);
+    const champYears = seasonResults.filter(r => r.championsReached === "Vittoria").map(r => r.year);
+    const italiaYears = seasonResults.filter(r => r.italiaReached === "Vittoria").map(r => r.year);
+
+    const objMet = (() => {
+      if (obj.key === "scudetto") return scudettoYears.length > 0;
+      if (obj.key === "champions") return champYears.length > 0;
+      if (obj.key === "triplete") return scudettoYears.some(y => champYears.includes(y) && italiaYears.includes(y));
+      return false;
+    })();
+
+    return (
+      <div style={wrap}>
+        <Header small />
+        <div style={{ maxWidth: 520, margin: "0 auto", padding: "0 20px" }}>
+          <div style={{ ...panel, borderColor: objMet ? S.gold : "#ff8e8e", textAlign: "center", marginBottom: 20 }}>
+            <div style={{ fontSize: 48 }}>{objMet ? "🏆" : "😔"}</div>
+            <div style={{ color: objMet ? S.gold : "#ff8e8e", fontSize: 22, fontWeight: 900, marginTop: 8 }}>
+              {objMet ? "OBIETTIVO RAGGIUNTO!" : "Obiettivo mancato"}
+            </div>
+            <div style={{ color: S.cream, opacity: .7, fontSize: 14, marginTop: 6 }}>
+              {obj.emoji} {obj.label} — {club} · {isSimple ? "🌟 Semplice" : "⚽ Realistica"}
+            </div>
+            <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 10 }}>
+              {[1, 2, 3].map(y => {
+                const sr = seasonResults.filter(r => r.year === y);
+                const realPos = sr.find(r => r.realPos != null)?.realPos;
+                const champWon = sr.some(r => r.championsReached === "Vittoria");
+                const italiaWon = sr.some(r => r.italiaReached === "Vittoria");
+                const scud = realPos === 1;
+                return (
+                  <div key={y} style={{ background: "rgba(0,0,0,.25)", borderRadius: 10, padding: "10px 14px", textAlign: "left" }}>
+                    <div style={{ color: S.gold, fontWeight: 800, fontSize: 13, marginBottom: 6 }}>Stagione {y}</div>
+                    {realPos != null ? (
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12, color: scud ? "#6ee7a8" : S.cream, opacity: scud ? 1 : .45 }}>
+                          {scud ? "✓" : "✗"} Scudetto ({realPos}° posto)
+                        </span>
+                        <span style={{ fontSize: 12, color: champWon ? "#6ee7a8" : S.cream, opacity: champWon ? 1 : .45 }}>
+                          {champWon ? "✓" : "✗"} Coppa Campioni
+                        </span>
+                        <span style={{ fontSize: 12, color: italiaWon ? "#6ee7a8" : S.cream, opacity: italiaWon ? 1 : .45 }}>
+                          {italiaWon ? "✓" : "✗"} Coppa Italia
+                        </span>
+                      </div>
+                    ) : (
+                      <div style={{ color: S.cream, opacity: .4, fontSize: 12 }}>—</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <button onClick={onBack} style={{ ...bigBtn, background: S.gold, color: S.ink }}>
+            ↩ Torna al menu
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+
+
 export default function App() {
-  const [phase, setPhase] = useState("setup"); // setup | draft | bonus | season | result | market
+  const [phase, setPhase] = useState("setup"); // setup | daily | draft | bonus | season | result | market
   const [formationKey, setFormationKey] = useState("4-3-3");
   const [difficulty, setDifficulty] = useState("normal");
   const [draftMode, setDraftMode] = useState("position"); // position | squad
@@ -2990,7 +3449,8 @@ export default function App() {
   }, [tripleteState, goToCup]);
 
   // ============ RENDER ============
-  if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,careerMode,setCareerMode,teamMode,setTeamMode,chosenTeam,setChosenTeam,cupMode,setCupMode,teamName,setTeamName,startGame}} />;
+  if (phase === "daily") return <DailyChallengeScreen onBack={() => setPhase("setup")} />;
+  if (phase === "setup") return <Setup {...{formationKey,setFormationKey,difficulty,setDifficulty,draftMode,setDraftMode,pickMode,setPickMode,seasonMode,setSeasonMode,chosenSeason,setChosenSeason,careerMode,setCareerMode,teamMode,setTeamMode,chosenTeam,setChosenTeam,cupMode,setCupMode,teamName,setTeamName,startGame,onStartDaily:()=>setPhase("daily")}} />;
   if (phase === "bonus") return <BonusSelect {...{squad, formation, usedIds, teamClub: teamMode ? chosenTeam : null, onConfirm:({bonusTotal,coach,captain,superSub,finalSquad})=>{ setSquad(finalSquad); if(finalSquad!==squad){ const s=new Set(usedIds); finalSquad.forEach(p=>p&&s.add(p.pid)); setUsedIds(s);} setBonusTotal(bonusTotal); setCoach(coach); setCaptain(captain); setSuperSub(superSub); setPhase("season"); }}} />;
   if (phase === "season") return <SeasonLive {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, teamName: effectiveTeamName, onDone:()=>setPhase("result")}} />;
   if (phase === "result") return <Result {...{squad, formation, forcedSeason, bonusTotal, coach, captain, superSub, excludeClub: teamMode ? chosenTeam : null, teamName: effectiveTeamName, careerMode, careerYear, cupMode, onGoCup:goToCup, onRestart:()=>setPhase("setup"), onAdvance:advanceCareer}} />;
