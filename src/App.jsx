@@ -1061,6 +1061,14 @@ function Header({ small }) {
       </div>
       <div style={{fontSize:small?10:13, color:S.cream, opacity:.6, letterSpacing:4,
         textTransform:"uppercase", marginTop:2}}>Serie A · Greatest XI</div>
+      <div style={{marginTop:8}}>
+        <a href="https://universosportivo.com/dream-team-builder/" target="_blank" rel="noopener noreferrer"
+          style={{display:"inline-flex", alignItems:"center", gap:6, background:"rgba(255,210,74,.12)",
+            border:`1px solid ${hexA(S.gold,.4)}`, borderRadius:20, padding:"5px 14px",
+            color:S.gold, textDecoration:"none", fontSize:12, fontWeight:700, letterSpacing:.5}}>
+          ⭐ Dream Team Builder
+        </a>
+      </div>
     </div>
   );
 }
@@ -1097,6 +1105,7 @@ function InfoModal({ onClose }) {
 
 // elenco di tutti i giochi del sito per il modale "Tutti i nostri giochi"
 const OTHER_GAMES = [
+  { emoji: "⭐", name: "Dream Team Builder", url: "https://universosportivo.com/dream-team-builder/" },
   { emoji: "🏆", name: "Serie A 38-0", url: "https://universosportivo.com/38-0-serie-a/" },
   { emoji: "🌍", name: "7-0 Mondiale", url: "https://universosportivo.com/7-0-mondiale/" },
   { emoji: "🧠", name: "Quiz di calcio", url: "https://universosportivo.com/quiz-calcio/" },
@@ -1162,6 +1171,10 @@ function Setup({ formationKey, setFormationKey, difficulty, setDifficulty, draft
           <button onClick={()=>setShowInfo(true)} style={{...chip(false), display:"inline-block"}}>
             ℹ️ Info & punteggi
           </button>
+          <a href="https://universosportivo.com/dream-team-builder/" target="_blank" rel="noopener noreferrer"
+             style={{...chip(false), display:"inline-block", textDecoration:"none", color:S.gold, borderColor:hexA(S.gold,0.8), fontWeight:700}}>
+            ⭐ Dream Team Builder
+          </a>
           <a href="https://universosportivo.com/quiz-calcio/" target="_blank" rel="noopener noreferrer"
              style={{...chip(false), display:"inline-block", textDecoration:"none", color:S.gold, borderColor:hexA(S.gold,0.6)}}>
             🧠 Quiz di calcio
@@ -2042,6 +2055,10 @@ function Result({ squad, formation, forcedSeason, bonusTotal = 0, coach = null, 
           <button onClick={downloadCard} style={{...bigBtnSm, background:S.gold, color:S.ink}}>
             {genState==="done" ? "✓ Salvata!" : "📲 Salva immagine"}
           </button>
+          <a href="https://universosportivo.com/dream-team-builder/" target="_blank" rel="noopener noreferrer"
+             style={{...bigBtnSm, background:S.gold, color:S.ink, textDecoration:"none", display:"inline-flex", alignItems:"center", fontWeight:900}}>
+            ⭐ Dream Team Builder
+          </a>
           <a href="https://universosportivo.com/quiz-calcio/" target="_blank" rel="noopener noreferrer"
              style={{...bigBtnSm, background:"#3aa0ff", color:"#fff", textDecoration:"none", display:"inline-flex", alignItems:"center"}}>
             🧠 Gioca ai quiz di calcio
